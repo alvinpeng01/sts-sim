@@ -1113,7 +1113,11 @@ namespace sts {
             case CardId::VOID:
             case CardId::WOUND:
             // Unplayable Skills -- they only trigger from the draw pile / on
-            // draw, and CardInstance already blocks playing them.
+            // draw. "CardInstance already blocks playing them" is what this
+            // comment used to claim, and it was false until 2026-08-01: the
+            // energy gate cannot reject a negative cost. CardInstance::canUse
+            // now has an explicit `costForTurn < -1` guard, which is what makes
+            // the claim true. Do not remove that guard.
             case CardId::DEUS_EX_MACHINA:
             case CardId::REFLEX:
             case CardId::TACTICIAN:

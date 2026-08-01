@@ -197,11 +197,14 @@ def test_card_select_states_resolve(color, name, card_id):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "Known open defect: unplayable status and curse cards carry cost -2, the "
-    "playability gate is `energy >= cost`, and -2 satisfies it for any "
-    "non-negative energy. Playing one removes it from hand for free. See "
-    "docs/07-known-issues.md. This test is expected to FAIL until that is fixed, "
-    "and strict=True makes it fail loudly the moment it starts passing."))
+    "FIXED IN SOURCE, NOT YET IN THE BINARY. CardInstance::canUse now carries a "
+    "`costForTurn < -1` guard, but the .pyd could not be relinked while a "
+    "training run held it. This marker documents the stale binary, not the "
+    "defect -- REMOVE IT in the same change that rebuilds the engine, or "
+    "strict=True will turn the fix into a red suite. Original defect: unplayable "
+    "cards carry cost -2, `energy < -2` is false for any non-negative energy, so "
+    "the gate passed them through and playing one freed a hand slot. Inherited "
+    "unchanged from upstream. See docs/07-known-issues.md."))
 def test_unplayable_cards_are_not_legal():
     """A card the game marks unplayable must never be offered as an action."""
     offenders = []
