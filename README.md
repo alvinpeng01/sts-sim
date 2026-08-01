@@ -33,6 +33,10 @@ Conventions and hazards for anyone changing code are in [`AGENTS.md`](AGENTS.md)
 | Tests | **185 passing** in 21 files |
 | Engine parameters | 68 runtime-tunable, 42 overridden by the shipped config |
 
+> **In flux as of 2026-08-01.** The borrowed play-priority table is removed in
+> source but not yet in the binary — the rebuild is blocked by a running job. On
+> landing, the parameter counts become **66 / 40**. See the update log.
+
 A20 figures re-baselined 2026-08-01 on the post-rebuild engine
 (`runs/rebaseline_v28_v31_200seeds_20260801.jsonl`). **The A0 figures predate
 several engine fixes and are not comparable to anything measured after them.**
@@ -149,19 +153,23 @@ no remote configured; that does not change the exposure.
 
 ## What has been established
 
-The value of this project is largely in what has been *ruled out*. Each row is
+The value of this project is largely in what has been *ruled out*. Most rows are
 backed by a harness under `slay-sim/lightspeed/` — see
-[docs/README.md](docs/README.md) for the full script table.
+[docs/README.md](docs/README.md) for the full script table. Rows marked † were
+produced by a harness that has since been removed and are no longer reproducible
+in-tree.
 
 ### Confirmed
 
 | finding | measurement |
 |---|---|
-| The overworld policy is the binding constraint | +15.71 ± 3.13 floors from swapping only that layer (`eval_heart1_hybrid.py`) |
+| The overworld policy is the binding constraint † | +15.71 ± 3.13 floors from swapping only that layer |
+| **Unplayable status/curse cards can be played, for free** | `Void`/`Wound`/`Burn`/`Dazed` are legal actions that leave the hand at no energy cost — a free discard the real game never grants |
 | The combat search is **draw-order clairvoyant** | −3.78 ± 0.84 HP/fight when blinded; our apparent lead over Silverbot was this cheat |
+| The borrowed play-priority table was load-bearing | removing it costs **−1.20 ± 0.49 HP** (t = −2.45) on 500 paired train fights |
 | Relic power level dominates combat tuning | +0.406 win rate at the encounter level, z = 8.10 — an order of magnitude above any other combat lever |
-| v31's routing preference is **inverted**, not miscalibrated | ELITE logit −2.55 against the human's +1.93 and Silverbot's +0.22 |
-| v31 does not rest when hurt | hp_frac × REST +1.19 against −1.93 (human) and −1.72 (Silverbot) |
+| v31's routing preference is **inverted**, not miscalibrated † | ELITE logit −2.55 against the human's +1.93 and Silverbot's +0.22 |
+| v31 does not rest when hurt † | hp_frac × REST +1.19 against −1.93 (human) and −1.72 (Silverbot) |
 | v31's aux heads predict combat outcomes | `next_combat_survival` AUC **0.817**, `next_combat_hp` R² **0.302**, on 4,617 on-policy decisions |
 | The engine matches the real game on constants | All 120 attack cards, 66 monster HP values, 64/76 relics verified against `desktop-1.0.jar` |
 
@@ -251,6 +259,33 @@ per-row loop. Verified against the single-observation path to 1e-4.
 as "still off at 0.0" and are all four tuned on in the shipped config. Found by a
 test that had been failing since the config shipped.
 
+**Route planning tried and refuted at one parameterisation.** Survival-weighted
+planning over the act-map DAG, using the aux heads above to price routes, took
+elite capture 3.3% → 89.2% and cost **−3.68 ± 1.10 floors**. Notably it did *not*
+collapse the way the imitation clone did (floor 20.43 against that clone's 7.08),
+so conditioning elite appetite on our own survival estimate does real work — just
+not enough. The likely defect is applying one survival probability to every fight,
+which makes an elite carry the same modelled risk as an ordinary monster.
+`_route_planner.py` and `_eval_route_planner.py` remain; the eval takes any
+map-decision rule.
+
+**Three harnesses removed** — `eval_heart1_hybrid.py`, `collect_heart1_labels.py`
+and `_silverbot_human_deck.py` all required an external agent installed. Nothing
+tracked here now depends on one.
+
+**A borrowed data table removed, and a bug found removing it.** The rollout's
+per-card play-priority prior was Silver Automaton's hand-curated 133-card
+ordering, re-encoded — verified as 132 of 133 entries matching their list exactly
+(one transcription slip: `GHOSTLY_ARMOR` ranked 83rd where it should be 8th).
+Removed to avoid carrying their data, at a measured cost of −1.20 ± 0.49 HP.
+`_fit_play_priority.py` refills the slot from our own search via a conditional
+logit over the cards available at each decision, which ranks Corruption, Fiend
+Fire, Immolate and Uppercut at the top; it is **not wired in**, because its data
+was collected on the engine that still has the status-card bug.
+
+**Unplayable cards are playable** — see Open problems. Found while chasing an
+anomaly in that fit, and the most consequential thing on this list.
+
 ### 2026-07-31
 
 Layer swap isolating the run policy (+15.71 floors). Human-deck combat benchmark
@@ -273,6 +308,16 @@ removed from hand).
 
 Roughly in order of expected value.
 
+0. **Unplayable status and curse cards can be played, for free.** `Void`, `Wound`,
+   `Burn` and `Dazed` are legal actions; playing one removes it from hand and
+   costs no energy. The search finds and exploits it. The cause is the cost
+   sentinel: these carry `cost = -2`, and the playability gate is
+   `energy >= cost`, which is true for any non-negative energy — so the check
+   passes instead of failing. Same class as the draw-order clairvoyance, but with
+   **no upside**: it is a correctness bug, it inflates every number measured on a
+   status-bearing deck, and fixing it should cost nothing but the inflation. Listed
+   first because it is cheap, and because it invalidates baselines, so it wants to
+   land in one batch with a re-baseline.
 1. **On-policy RL for the run policy.** Imitation is refuted and representation is
    closed, leaving this as the path to the +15.71 floors the layer swap proved
    available. Episodes are cheap (0.54 s at 100 combat sims); the update is the
@@ -314,9 +359,13 @@ notable ones:
   port of their `SimpleAgent`'s block heuristic, found while investigating why
   our rollouts finished fights with less HP than theirs at matched simulation
   counts. It is live in the shipped config.
-- **The card play-priority prior.** `silverCardPlayRank` is their 133-card
-  ordering, used as a per-card term in the rollout heuristic
-  (`silver_card_play_prior_weight`, tuned to 5.0).
+- **The card play-priority prior** — *removed 2026-08-01, and the one case where
+  this project carried their data rather than their idea.* `silverCardPlayRank`
+  was their hand-curated 133-card ordering re-encoded as a 372-entry lookup: 132
+  of 133 entries matched their list exactly, with one transcription slip. It was
+  load-bearing (−1.20 ± 0.49 HP to remove) and removed anyway, since a curated
+  ranking is their work and not an algorithm. `_fit_play_priority.py` refills the
+  slot from this project's own search.
 - **The allocation-free rollout.** `nativeHeuristicPickFast` scans the hand
   without materialising a legal-action vector, the same idea as their
   `SimpleAgent::chooseBattleCardPlay`. That path was 71.7% of simulation cost.
