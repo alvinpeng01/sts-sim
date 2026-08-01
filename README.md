@@ -215,6 +215,7 @@ in-tree.
 | Honest draws would un-flatten the sims curve | Clairvoyant gains **+3.47 ± 0.74** from 100→900 sims; honest gains **+0.75 ± 0.79** — the reverse |
 | Progressive widening explains that flat honest response | **Refuted on val.** Looked like +4.27 ± 1.21 (t = 3.52) on a disjoint *train* slice; on val neither the grid best nor the hand-picked setting beats shipped (−0.69 ± 1.01 and −1.60 ± 0.93). Confirming on train is not confirming |
 | Survival-weighted route planning (elite weight 3.0) | **−3.68 ± 1.10** floors, elite capture 3.3% → 89.2% |
+| A canonical (unordered) draw pile beats a per-sample ordered one | **+0.48 ± 0.58** (t = 0.84) on 150 train fights at k = 3 — inside the noise floor. See below |
 
 ### Measurement traps this project has actually fallen into
 
@@ -275,6 +276,35 @@ consumes no RNG, so the `nativeRngCounterSum` probe classified every mid-turn
 draw card as deterministic and cached a single order. Only END_TURN was ever a
 chance node. It costs −4.78 ± 0.71 HP, and the case for enabling it is honest
 measurement and a trustworthy live bridge — **not floors**.
+
+**The belief-search headroom was already banked, and a canonical pile adds
+nothing on top.** Silverbot reports a large win for averaging over draw orders
+inside the tree versus committing to one sampled order per decision. That gap is
+not available here: `honest_draw_order = 1` already seeds its permutation from a
+per-sample index, so every DPW chance sample and every rollout gets its own
+order — the averaging shape, not the committing one. The only residual leak was
+narrower: a sample's order is inherited by its whole subtree, so a deep decision
+can plan around draws it should not know. `honest_draw_order = 2` closes that by
+re-permuting the remaining pile after every action that drew, anywhere in the
+tree or the rollout, which is what an unordered pile with lazy draws would give
+without restructuring `CardManager` (shared with the real-game path). It measures
+**+0.48 ± 0.58 (t = 0.84)** — a null. The modes are genuinely distinct (116/150
+fights differ), so this is a refutation and not a no-op. Keep `1`.
+
+**A real bug fell out of it.** Card-select and scry actions are *positions* into
+`drawPile`, and validity is what sits at that position — `SECRET_WEAPON` is legal
+only if `drawPile[idx].getType() == ATTACK`. The permutation ran on the child copy
+*after* the action had been enumerated against the parent's order, so the index
+could land on a card of the wrong type; the engine then dumped the entire
+`BattleContext` to stderr and applied the action anyway. It fired once in 900
+plays, found by attributing a stray 6 KB stderr dump. Fixed by skipping the
+pre-execute permutation for exactly those action types, which loses no honesty —
+a card-select screen shows the player the pile, so the choice is over identities
+and the order carries no hidden information to protect. Pinned by
+`tests/test_honest_draw_pile.py`, which fails on the unguarded engine in both
+regimes and passes on the fixed one. Worth **+0.82 ± 0.61** HP, i.e. not
+measurably worth anything: skipping a shuffle changes how much `rng` is consumed,
+so 96 of 150 fights simply re-roll. It is a correctness fix, not a gain.
 
 **Auxiliary heads verified as trained and useful** — `next_combat_survival` at
 AUC 0.817 and `next_combat_hp` at R² 0.302 are a working combat-outcome model,

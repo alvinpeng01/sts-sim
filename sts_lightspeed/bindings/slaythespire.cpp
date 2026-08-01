@@ -388,6 +388,19 @@ namespace {
         // un-flattens: combat is measured flat from 43 to 1500 sims, and perfect draw
         // knowledge collapsing chance-node variance is a leading suspect for why. Silverbot's
         // honest engine defaults to a far larger budget for exactly this reason.
+        // 0 = off (clairvoyant). 1 = per-sample order: the pile is permuted once
+        // per DPW chance sample and once per rollout, so the tree AVERAGES over
+        // orders rather than committing to one per decision. That is already the
+        // good half of Silverbot's +21pp result -- their losing variant sampled a
+        // single order per decision and reused it for every simulation.
+        //
+        // 2 = LAZY, the canonical-CardPile semantics. The remaining leak at 1 is
+        // that a sample's order is inherited by everything BELOW it, so a subtree
+        // can plan around draws it should not know. At 2 the pile is re-permuted
+        // after every action that drew, anywhere in the tree or the rollout, so
+        // each draw is an independent uniform sample from the remaining multiset
+        // -- which is what an unordered pile with lazy draws would give, without
+        // restructuring CardManager (shared with the real-game path).
         double honestDrawOrder = 0.0;
         // Trial length: how many turns past the current one a simulation may reach
         // before the tree cuts off and the static leaf estimate is applied
@@ -1530,6 +1543,27 @@ namespace {
     // behind g_params.honestDrawOrder -- see TunableParams for why it exists and what it
     // costs. Fisher-Yates over CardManager's fixed_list, which supports indexed assignment
     // (set_draw_pile_order's binding already relies on that).
+    // An action whose index is bound to the CURRENT draw-pile order. Card-select
+    // actions are enumerated as positions into `drawPile` and validated by what
+    // sits at that position -- SECRET_WEAPON, for instance, is only legal if
+    // `drawPile[idx].getType() == ATTACK` (Action.cpp) -- and SCRY indexes the
+    // top N. Permuting the pile between enumeration (against the PARENT state)
+    // and execution therefore re-points the index at a different card, and the
+    // engine dumps the whole BattleContext to stderr when the action it is
+    // handed is no longer valid. Shuffling for these is also pointless: a
+    // card-select screen shows the player the pile, so the choice is over card
+    // identities and the order carries no hidden information to protect.
+    bool nativeActionBindsPileOrder(const search::Action &action) {
+        switch (action.getActionType()) {
+            case search::ActionType::SINGLE_CARD_SELECT:
+            case search::ActionType::MULTI_CARD_SELECT:
+            case search::ActionType::SCRY:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     void nativeShuffleDrawPile(BattleContext &bc, std::mt19937_64 &gen) {
         auto &pile = bc.cards.drawPile;
         for (int i = static_cast<int>(pile.size()) - 1; i > 0; --i) {
@@ -1804,7 +1838,12 @@ namespace {
             if (nativeMastActive()) {
                 nativeMastRecord(sim, action);
             }
+            const std::size_t drawBeforeStep = sim.cards.drawPile.size();
             action.execute(sim);
+            if (g_params.honestDrawOrder >= 2.0
+                && sim.cards.drawPile.size() < drawBeforeStep) {
+                nativeShuffleDrawPile(sim, g_drawShuffleRng);
+            }
         }
         return NATIVE_W_SHAPE * nativePotential(sim);
     }
@@ -2568,11 +2607,20 @@ namespace {
             // covers draw orders alongside every other stochastic outcome and the tree
             // averages over them in place. Derived from the same seed the rest of this
             // sample uses, so paired comparisons keep their common random numbers.
-            if (nativeHonestDrawOrder()) {
-                std::mt19937_64 shuffleRng(shuffleSeed);
+            std::mt19937_64 shuffleRng(shuffleSeed);
+            if (nativeHonestDrawOrder() && !nativeActionBindsPileOrder(action)) {
                 nativeShuffleDrawPile(sample, shuffleRng);
             }
+            const std::size_t drawBeforeSample = sample.cards.drawPile.size();
             action.execute(sample);
+            // Lazy: the cards this action drew are now known, but what remains
+            // must not be. Re-permuting makes the NEXT draw independent of this
+            // sample's order, which is the whole difference between an ordered
+            // pile and a canonical one.
+            if (g_params.honestDrawOrder >= 2.0
+                && sample.cards.drawPile.size() < drawBeforeSample) {
+                nativeShuffleDrawPile(sample, shuffleRng);
+            }
 
             MctsNode *child = nullptr;
             if (g_useStateMerging) {
@@ -2680,13 +2728,16 @@ namespace {
             // action that actually DREW is reclassified as a chance node, so DPW widening
             // samples several draw orders for it and the tree averages over them.
             const std::size_t drawPileBefore = childBc.cards.drawPile.size();
-            if (nativeHonestDrawOrder()) {
+            if (nativeHonestDrawOrder() && !nativeActionBindsPileOrder(action)) {
                 nativeShuffleDrawPile(childBc, rng);
             }
             action.execute(childBc);
             bool consumedRng = nativeRngCounterSum(childBc) != counterBefore;
             if (nativeHonestDrawOrder() && childBc.cards.drawPile.size() < drawPileBefore) {
                 consumedRng = true;
+                if (g_params.honestDrawOrder >= 2.0) {
+                    nativeShuffleDrawPile(childBc, rng);
+                }
             }
             const double r = nativeExpectimaxDenseReward(bc, childBc);
             MctsNode *child = nullptr;

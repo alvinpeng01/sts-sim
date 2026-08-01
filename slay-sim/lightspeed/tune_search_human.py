@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import multiprocessing as mp
 import random
 import time
@@ -75,6 +76,28 @@ LOG_PATH = str(LIGHTSPEED_DIR / "tune_search_human_progress.log")
 
 SIMS = 100
 SIGMA0 = 0.15
+# Pinned in every worker, deliberately NOT in PARAM_NAMES. honest_draw_order is a
+# REGIME, not a knob: if CMA-ES could move it, the cheapest way for a candidate to
+# score well would be to turn draw-order clairvoyance back on, which is worth
+# ~4.9 HP and would swamp every real parameter. Set by --honest.
+def _honest_draw_order() -> float:
+    """1.0 when tuning without draw-order clairvoyance.
+
+    Read from the environment rather than a module constant because workers are
+    SPAWNED on Windows: they re-import this module and never see anything main()
+    assigns, but they do inherit os.environ. Same reason BENCHMARK_PATH is a
+    module-level literal.
+    """
+    return 1.0 if os.environ.get("STS_TUNE_HONEST") == "1" else 0.0
+# Search seeds averaged per fight inside the objective. One is not enough: an
+# identical config scored against ITSELF reports +1.60 +/- 0.68 (t = 2.34) at
+# k=1, per-fight sd 10.82 HP (docs/04-evaluation.md). A 42-parameter optimiser
+# handed an objective that noisy fits the noise -- which tune_search_cma.py's own
+# docstring records happening to it, with per-generation seed noise (sd ~0.06)
+# swamping real improvements (0.02-0.05).
+def _score_seeds() -> int:
+    """Search seeds averaged per fight; see _honest_draw_order for why env."""
+    return max(1, int(os.environ.get("STS_TUNE_SCORE_SEEDS", "2")))
 # Fraction of the train split scored per evaluation -- see _evaluate_candidate.
 # At 1730 train fights this is ~600 per evaluation, already far more than the
 # comparison needs (all candidates share the subset, so the pairing does the
@@ -165,12 +188,26 @@ def _score_fights(fights, sims: int, seed_base: int, ascension: int) -> float:
         # hash() would give the same fight a different search seed in every
         # worker and destroy the pairing this whole comparison rests on.
         fight_key = zlib.crc32(f"{rec['run_id']}:{rec['floor']}".encode())
-        damage, outcome = play(bc, sims, (seed_base << 20) ^ fight_key)
-        # A death pays every point of HP that was left, which is what it costs a
-        # run. Without this a death would score as merely "the damage before
-        # dying" and could look cheaper than a won fight.
-        hp_paid = rec["cur_hp"] if outcome != sts.BattleOutcome.PLAYER_VICTORY else damage
-        total += rec["human_damage"] - hp_paid
+        per_seed = 0.0
+        seeds = _score_seeds()
+        for seed in range(seeds):
+            if seed:
+                bc, _ = build_battle(rec["deck"], rec["relics"], rec["cur_hp"],
+                                     rec["max_hp"],
+                                     getattr(sts.MonsterEncounter,
+                                             rec["encounter"]),
+                                     ascension, rec["act"],
+                                     rec.get("potions", ()))
+            damage, outcome = play(bc, sims,
+                                   ((seed_base + seed * 7919) << 20) ^ fight_key)
+            # A death pays every point of HP that was left, which is what it
+            # costs a run. Without this a death would score as merely "the damage
+            # before dying" and could look cheaper than a won fight.
+            hp_paid = (rec["cur_hp"]
+                       if outcome != sts.BattleOutcome.PLAYER_VICTORY
+                       else damage)
+            per_seed += rec["human_damage"] - hp_paid
+        total += per_seed / seeds
         counted += 1
     return total / max(1, counted)
 
@@ -184,8 +221,10 @@ def _evaluate_validation(args) -> tuple[float, int]:
     x, defaults, shard, sims = args
     import slaythespire as sts
 
-    sts.set_search_params({name: _raw_for(name, x[i], defaults[name])
-                           for i, name in enumerate(PARAM_NAMES)})
+    params = {name: _raw_for(name, x[i], defaults[name])
+              for i, name in enumerate(PARAM_NAMES)}
+    params["honest_draw_order"] = _honest_draw_order()
+    sts.set_search_params(params)
     shard_fights = _worker_val[shard::VAL_SHARDS]
     return (_score_fights(shard_fights, sims, 0, TUNE_ASCENSION)
             * len(shard_fights), len(shard_fights))
@@ -257,8 +296,10 @@ def _evaluate_candidate(args) -> float:
     x, defaults, seed_base, sims = args
     import slaythespire as sts
 
-    sts.set_search_params({name: _raw_for(name, x[i], defaults[name])
-                           for i, name in enumerate(PARAM_NAMES)})
+    params = {name: _raw_for(name, x[i], defaults[name])
+              for i, name in enumerate(PARAM_NAMES)}
+    params["honest_draw_order"] = _honest_draw_order()
+    sts.set_search_params(params)
 
     # Resample WHICH fights each generation, not just the search RNG. Scoring the
     # same 388 fights every time makes the confirmation round a test of RNG luck
@@ -282,6 +323,13 @@ def main() -> None:
     global SIMS, OUT_PATH, LOG_PATH
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--minutes", type=float, default=420.0)
+    parser.add_argument("--honest", action="store_true",
+                        help="tune with draw-order clairvoyance REMOVED. The "
+                             "shipped 42 parameters were all fitted with the "
+                             "search knowing the draw order; nothing has ever "
+                             "been tuned for honest play.")
+    parser.add_argument("--score-seeds", type=int, default=2,
+                        help="search seeds averaged per fight in the objective")
     parser.add_argument("--workers", type=int, default=11,
                         help="parallel processes; hardware, not algorithm")
     parser.add_argument("--popsize", type=int, default=0,
@@ -315,6 +363,9 @@ def main() -> None:
     # 11. It costs nothing here: 11 workers need two rounds for 12 tasks and two
     # rounds for 15, so the extra candidates ride along in slack that already
     # existed.
+    if args.honest:
+        os.environ["STS_TUNE_HONEST"] = "1"
+    os.environ["STS_TUNE_SCORE_SEEDS"] = str(args.score_seeds)
     popsize = args.popsize or (4 + int(3 * math.log(len(PARAM_NAMES))))
     _log(f"=== human-baseline CMA-ES: {n_train} train fights, {SIMS} sims, "
          f"{len(PARAM_NAMES)} params (incl. rollout_temperature), "
