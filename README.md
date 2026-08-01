@@ -37,7 +37,7 @@ anyone changing code are in [`AGENTS.md`](AGENTS.md).
 | Ascension 0 | mean floor 39.21 over 100 seeds; **13 victories** |
 | vs. previous best (v28, 21.64) | **+1.41 ± 0.50** paired floors, t = 2.82 |
 | Combat vs. a top human | **−5.78** mean HP against his own decks (0 = parity) |
-| Tests | **185 passing** in 21 files |
+| Tests | **412 passing** in 22 files (1 xfail: a known open defect) |
 | Engine parameters | 68 runtime-tunable, 42 overridden by the shipped config |
 
 > **In flux as of 2026-08-01.** The borrowed play-priority table is removed in
@@ -103,7 +103,7 @@ There is no `pyproject.toml`. Put `sts_lightspeed/build` on `PYTHONPATH`.
 cd slay-sim && python -c "import slaythespire; print('native engine ok')" && python -m pytest -q
 ```
 
-185 tests. The import check is the real test that the native build worked.
+412 tests. The import check is the real test that the native build worked.
 
 ### 4. Run something
 
@@ -138,7 +138,7 @@ working tree and is not published.
 The three scripts that required Daniel Ziegler's fork to be present —
 `eval_heart1_hybrid.py`, `collect_heart1_labels.py` and
 `_silverbot_human_deck.py` — were removed on 2026-08-01, so everything tracked
-here runs against this repository alone. All 185 tests pass with no external
+here runs against this repository alone. The whole suite passes with no external
 agent installed.
 
 **The findings those harnesses produced remain valid and are recorded in
