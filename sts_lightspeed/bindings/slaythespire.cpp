@@ -90,7 +90,21 @@ namespace {
     // Moved up from its original spot next to nativeLeafFeatures's own definition so
     // nativePolicyNetScore's forward declaration (which needs the array type) can use it --
     // nativeLeafFeatures itself is still defined in its original spot further down.
-    static constexpr int NATIVE_LEAF_FEATURE_DIM = 10;
+    // 10 originally, widened to 30 on 2026-08-01. The first TEN entries are
+    // frozen in order and meaning: g_params.vf* apply to them positionally
+    // (nativeLeafValueEstimate reads f[0]..f[9]), so the linear "value" leaf mode
+    // is unchanged by the extension and only the learned estimators see the rest.
+    //
+    // Why widen. The linear leaf estimate measured -19.14 +/- 1.16 HP against a
+    // rollout at matched simulations, and still -14.96 at 4x the simulations.
+    // That was read as "static evaluation loses to rollouts", but the ten
+    // features are DECK-BLIND -- no hand, no piles, no relics, and 3 of 19 player
+    // statuses -- so they cannot tell a hand of Strikes from a hand holding
+    // Corruption. The same vector also feeds nativePolicyNetScore, so one thin
+    // representation was choking both learned components; the distillation
+    // post-mortem in docs/03-combat-search.md reaches the same conclusion from
+    // the action side.
+    static constexpr int NATIVE_LEAF_FEATURE_DIM = 30;
     constexpr double NATIVE_W_HP = 1.5;
     constexpr double NATIVE_BETA = 3.0;
     constexpr double NATIVE_W_WIN = 200.0;
@@ -1954,17 +1968,97 @@ namespace {
             monsterHp += m.curHp;
             incoming += nativePredictedIncomingDamage(bc, m, vulnMult);
         }
+        // --- composition of every pile, which the original ten could not see ---
+        int handAttack = 0, handSkill = 0, handPower = 0, handDead = 0;
+        double handCost = 0.0;
+        for (int i = 0; i < bc.cards.cardsInHand; ++i) {
+            const CardInstance &c = bc.cards.hand[i];
+            switch (cardTypes[static_cast<int>(c.id)]) {
+                case CardType::ATTACK: ++handAttack; break;
+                case CardType::SKILL:  ++handSkill;  break;
+                case CardType::POWER:  ++handPower;  break;
+                default:               ++handDead;   break;  // status / curse
+            }
+            if (c.costForTurn >= 0) {
+                handCost += c.costForTurn;
+            }
+        }
+        int deckAttack = 0, deckSkill = 0, deckPower = 0, deckDead = 0;
+        const auto countRest = [&](const auto &pile, std::size_t n) {
+            for (std::size_t i = 0; i < n; ++i) {
+                switch (cardTypes[static_cast<int>(pile[i].id)]) {
+                    case CardType::ATTACK: ++deckAttack; break;
+                    case CardType::SKILL:  ++deckSkill;  break;
+                    case CardType::POWER:  ++deckPower;  break;
+                    default:               ++deckDead;   break;
+                }
+            }
+        };
+        countRest(bc.cards.drawPile, bc.cards.drawPile.size());
+        countRest(bc.cards.discardPile, bc.cards.discardPile.size());
+
+        // Worst single hit matters separately from the total: 30 incoming from one
+        // monster is a different problem from 10 each from three.
+        double worstHit = 0.0;
+        int monstersVulnerable = 0, monstersWeak = 0;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const Monster &m = bc.monsters.arr[i];
+            if (m.curHp <= 0 && !m.halfDead) {
+                continue;
+            }
+            worstHit = std::max(worstHit, static_cast<double>(
+                nativePredictedIncomingDamage(bc, m, vulnMult)));
+            if (m.vulnerable > 0) ++monstersVulnerable;
+            if (m.weak > 0) ++monstersWeak;
+        }
+        int potions = 0;
+        for (int i = 0; i < bc.potionCapacity; ++i) {
+            const auto p = bc.potions[i];
+            if (p != Potion::EMPTY_POTION_SLOT && p != Potion::INVALID) {
+                ++potions;
+            }
+        }
+        const auto status = [&](PlayerStatus s) {
+            return static_cast<double>(bc.player.getStatusRuntime(s));
+        };
         return {
+            // [0..9] FROZEN -- g_params.vf* index these positionally.
             static_cast<double>(bc.player.curHp),
             static_cast<double>(bc.player.block),
             static_cast<double>(bc.player.energy),
             static_cast<double>(bc.player.strength),
             static_cast<double>(bc.player.dexterity),
-            static_cast<double>(bc.player.getStatusRuntime(PlayerStatus::METALLICIZE)),
+            status(PlayerStatus::METALLICIZE),
             monsterHp,
             incoming,
             static_cast<double>(alive),
             static_cast<double>(bc.turn),
+            // [10..13] resources the ten omitted entirely
+            static_cast<double>(bc.player.maxHp),
+            static_cast<double>(potions),
+            worstHit,
+            monsterHp > 0.0 ? incoming / std::max(1.0, static_cast<double>(bc.player.curHp)
+                                                       + bc.player.block) : 0.0,
+            // [14..19] hand composition -- what can actually be played right now
+            static_cast<double>(bc.cards.cardsInHand),
+            static_cast<double>(handAttack),
+            static_cast<double>(handSkill),
+            static_cast<double>(handPower),
+            static_cast<double>(handDead),
+            handCost,
+            // [20..24] what is left in the deck, and where
+            static_cast<double>(bc.cards.drawPile.size()),
+            static_cast<double>(bc.cards.discardPile.size()),
+            static_cast<double>(deckAttack),
+            static_cast<double>(deckSkill),
+            static_cast<double>(deckPower + deckDead),
+            // [25..27] player debuffs that change every damage number
+            status(PlayerStatus::VULNERABLE),
+            status(PlayerStatus::WEAK),
+            status(PlayerStatus::FRAIL),
+            // [28..29] monster debuffs the search spends terms trying to apply
+            static_cast<double>(monstersVulnerable),
+            static_cast<double>(monstersWeak),
         };
     }
 
