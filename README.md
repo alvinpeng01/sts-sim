@@ -233,6 +233,15 @@ The short list:
   and −0.58 ± 0.56 on 500 train fights.
 - **Engine rebuilds invalidate comparisons.** Check the `.pyd` mtime against the
   eval log's.
+- **One search seed per fight is not a measurement.** With the config held
+  identical and only the seed set changed, 250 paired fights reported
+  **+1.60 ± 0.68, t = 2.34** — a significant result from changing nothing, with
+  151 of 250 fights differing. Pairing controls the fight, not the search:
+  `rollout_temperature` is 2.489, so the rollout samples, and any change that
+  alters one action re-rolls the rest of that fight. Averaging 3 seeds cuts the
+  per-fight sd 13.73 → 7.82 and the spurious t to 0.86. `_param_ab.py` defaults
+  to `--seeds 3`; **effects of 1–2 HP measured at one seed are not
+  distinguishable from noise**, which covers most of the combat results here.
 
 ---
 

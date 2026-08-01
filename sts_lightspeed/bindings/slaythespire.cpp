@@ -375,6 +375,20 @@ namespace {
         // knowledge collapsing chance-node variance is a leading suspect for why. Silverbot's
         // honest engine defaults to a far larger budget for exactly this reason.
         double honestDrawOrder = 0.0;
+        // Trial length: how many turns past the current one a simulation may reach
+        // before the tree cuts off and the static leaf estimate is applied
+        // (`node->bc.turn >= maxTurn` in nativeSimulate). 20 is the value this
+        // search has always used, as the compile-time NATIVE_MAX_TURNS_PER_SEARCH.
+        //
+        // This is the fifth ingredient of the THTS framework (Keller & Helmert,
+        // ICAPS 2013) -- heuristic function, backup function, action selection,
+        // outcome selection, trial length -- and the only one never varied here.
+        // Shortening it is what turns their DP-UCT into UCT*, on the reasoning
+        // that a limited trial length "distributes resources better in the search
+        // space" by investigating states nearer the root more thoroughly. Worth
+        // testing here because extra simulations demonstrably fail to buy depth
+        // under honest draws, and widening has been ruled out as the cause.
+        double searchMaxTurns = 20.0;
         // How many root actions sequential halving is allowed to consider, chosen by
         // Gumbel-Top-k over the heuristic priors. 0 (or >= the legal-action count) keeps
         // every action, which is what this search did before the parameter existed and is
@@ -2699,7 +2713,7 @@ namespace {
         std::unordered_map<NativeStateKey, MctsNode *, NativeStateKeyHash> transTable;
         std::random_device rd;
         std::mt19937_64 rng(useSearchSeed ? searchSeed : rd());
-        const int maxTurn = bc.turn + NATIVE_MAX_TURNS_PER_SEARCH;
+        const int maxTurn = bc.turn + static_cast<int>(g_params.searchMaxTurns);
 
         // Initialize the root so its action list exists before allocation decisions are made.
         // Calling nativeExpandLeaf here would run and discard one full rollout.
@@ -2878,7 +2892,7 @@ namespace {
         std::unordered_map<NativeStateKey, MctsNode *, NativeStateKeyHash> transTable;
         std::random_device rd;
         std::mt19937_64 rng(useSearchSeed ? searchSeed : rd());
-        const int maxTurn = bc.turn + NATIVE_MAX_TURNS_PER_SEARCH;
+        const int maxTurn = bc.turn + static_cast<int>(g_params.searchMaxTurns);
         // One reused buffer rather than a fresh vector per simulation: cleared each time, so it
         // keeps its capacity and the RAVE path costs no per-simulation allocation.
         std::vector<std::uint32_t> raveTrace;
@@ -4903,6 +4917,7 @@ PYBIND11_MODULE(slaythespire, m) {
         d["seq_halving_candidates"] = g_params.seqHalvingCandidates;
         d["backup_max_weight"] = g_params.backupMaxWeight;
         d["honest_draw_order"] = g_params.honestDrawOrder;
+        d["search_max_turns"] = g_params.searchMaxTurns;
         d["power_score"] = g_params.powerScore;
         d["end_turn_time_warp_risk_score"] = g_params.endTurnTimeWarpRiskScore;
         d["skill_haste_danger_threshold"] = g_params.skillHasteDangerThreshold;
@@ -4998,6 +5013,7 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("seq_halving_candidates", g_params.seqHalvingCandidates);
         setIf("backup_max_weight", g_params.backupMaxWeight);
         setIf("honest_draw_order", g_params.honestDrawOrder);
+        setIf("search_max_turns", g_params.searchMaxTurns);
         setIf("power_score", g_params.powerScore);
         setIf("end_turn_time_warp_risk_score", g_params.endTurnTimeWarpRiskScore);
         setIf("skill_haste_danger_threshold", g_params.skillHasteDangerThreshold);

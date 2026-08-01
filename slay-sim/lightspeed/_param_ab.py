@@ -19,6 +19,23 @@ differences rather than assumed. That is only meaningful because the Gumbel
 seeding fix made the search reproducible; before it, sibling arms diverged
 silently (see `docs/07-known-issues.md`).
 
+**Why `--seeds` defaults to 3 rather than 1.** Pairing controls the fight, not
+the search. `rollout_temperature` is tuned to 2.489, so the rollout SAMPLES
+rather than taking an argmax, and any change that alters a trajectory breaks the
+shared randomness from that point on. Measured on 2026-08-01 with the config held
+IDENTICAL and only the seed set changed, on 250 paired fights:
+
+    seedset A vs B   +1.60 +/- 0.68   t = +2.34
+    seedset A vs C   +1.01 +/- 0.68   t = +1.48
+    seedset B vs C   -0.59 +/- 0.69   t = -0.85
+
+Changing nothing produced t = 2.34, and 151 of 250 fights differed. The per-fight
+sd of the paired difference is **10.82 HP**, so a single-seed run has SE 0.88 at
+n=150 and 0.48 at n=500 before any real effect is measured. Most parameters
+tested on this benchmark move 1-2 HP, which is the same size. Averaging k seeds
+divides that floor by sqrt(k) for k times the compute, and the compute here is
+seconds.
+
     python -m lightspeed._param_ab --param seq_halving_candidates --values 4,6,8
     python -m lightspeed._param_ab --param mast_weight --values 0.5,1,2 --limit 500
 """
@@ -39,28 +56,40 @@ from .paths import HUMAN_BENCHMARK
 BENCHMARK_PATH = str(HUMAN_BENCHMARK)
 
 
-def score(fights, sims: int, overrides: dict[str, float]) -> tuple[list[float], int]:
+def score(fights, sims: int, overrides: dict[str, float],
+          seeds: int = 3) -> tuple[list[float], int]:
     """Objective per fight under the shipped config plus `overrides`.
 
     Re-applies the shipped config every call rather than setting only the keys
     that changed: `set_search_params` is a partial update over unlocked global
     state, so an arm would otherwise inherit whatever the previous arm left
     behind. That is the same reason `apply_search_config` resets first.
+
+    Each fight is averaged over `seeds` search seeds. That is not a refinement,
+    it is the difference between a measurement and a coin flip -- see the
+    module docstring's noise-floor numbers.
     """
     ensure_search_config(DEFAULT_SEARCH_CONFIG_PATH)
     if overrides:
         sts.set_search_params(overrides)
     values, deaths = [], 0
     for index, record in enumerate(fights):
-        battle, _ = build_battle(
-            record["deck"], record["relics"], record["cur_hp"], record["max_hp"],
-            getattr(sts.MonsterEncounter, record["encounter"]),
-            20, record["act"], record.get("potions", ()))
-        damage, outcome = play(battle, sims, index)
-        died = outcome != sts.BattleOutcome.PLAYER_VICTORY
-        deaths += died
-        values.append(record["human_damage"] - (record["cur_hp"] if died else damage))
-    return values, deaths
+        per_seed = []
+        for seed in range(seeds):
+            battle, _ = build_battle(
+                record["deck"], record["relics"], record["cur_hp"],
+                record["max_hp"],
+                getattr(sts.MonsterEncounter, record["encounter"]),
+                20, record["act"], record.get("potions", ()))
+            # Seeds are offset far apart so two arms sharing `index` still share
+            # their seed set -- the pairing survives, only the sampling widens.
+            damage, outcome = play(battle, sims, index + seed * 1_000_003)
+            died = outcome != sts.BattleOutcome.PLAYER_VICTORY
+            deaths += died
+            per_seed.append(record["human_damage"]
+                            - (record["cur_hp"] if died else damage))
+        values.append(statistics.mean(per_seed))
+    return values, deaths / max(1, seeds)
 
 
 def main() -> None:
@@ -74,6 +103,9 @@ def main() -> None:
                              "choosing test")
     parser.add_argument("--limit", type=int, default=500)
     parser.add_argument("--sims", type=int, default=100)
+    parser.add_argument("--seeds", type=int, default=3,
+                        help="search seeds averaged per fight; 1 reproduces the "
+                             "old single-seed behaviour and its 0.88 HP noise floor")
     args = parser.parse_args()
 
     live = sts.get_search_params()
@@ -86,21 +118,22 @@ def main() -> None:
     fights = [r for r in records if r["split"] == args.split][: args.limit]
 
     print(f"{args.param}: {len(fights)} {args.split} fights at {args.sims} sims, "
-          f"paired (common random numbers)")
+          f"{args.seeds} seed(s) per fight, paired")
     start = time.time()
-    baseline, base_deaths = score(fights, args.sims, {})
+    baseline, base_deaths = score(fights, args.sims, {}, args.seeds)
     print(f"  {'shipped':>24s}  {statistics.mean(baseline):+8.3f}   "
-          f"deaths {base_deaths:3d}   ({time.time()-start:.0f}s)")
+          f"deaths {base_deaths:5.1f}   ({time.time()-start:.0f}s)")
 
     for raw in args.values.split(","):
         value = float(raw)
-        values, deaths = score(fights, args.sims, {args.param: value})
+        values, deaths = score(fights, args.sims, {args.param: value},
+                               args.seeds)
         deltas = [a - b for a, b in zip(values, baseline)]
         mean = statistics.mean(deltas)
         stderr = statistics.stdev(deltas) / math.sqrt(len(deltas))
         changed = sum(1 for d in deltas if d)
         print(f"  {args.param + '=' + raw:>24s}  {statistics.mean(values):+8.3f}   "
-              f"deaths {deaths:3d}   delta {mean:+6.2f} +/- {stderr:.2f} "
+              f"deaths {deaths:5.1f}   delta {mean:+6.2f} +/- {stderr:.2f} "
               f"(t={mean/stderr if stderr else 0:+5.2f})  changed {changed}/{len(deltas)}")
 
     print("\nA delta inside one standard error is a null, not a small win. If nothing "
