@@ -213,7 +213,7 @@ in-tree.
 | Gumbel-Top-k root candidate selection | **−2.08 ± 0.55** HP at m = 4 |
 | MAST (online per-card table) | Null at every weight tested |
 | Rollout potion scoring | Null to negative at every setting tested |
-| Honest draws would un-flatten the sims curve | Clairvoyant gains **+3.47 ± 0.74** from 100→900 sims; honest gains **+0.75 ± 0.79** — the reverse |
+| ~~Honest draws would un-flatten the sims curve~~ | **Retracted same day.** True only at the shipped progressive-widening parameters, which were tuned when END_TURN was the only chance node. At `wc_chance` 1.0 / `wa_chance` 0.35 the honest arm gains **+4.73 ± 1.21** from 100→900 sims (t = 3.90), and beats the shipped widening by **+4.27 ± 1.21** at 900 |
 | Survival-weighted route planning (elite weight 3.0) | **−3.68 ± 1.10** floors, elite capture 3.3% → 89.2% |
 
 ### Measurement traps this project has actually fallen into
