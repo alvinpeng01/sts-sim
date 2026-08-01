@@ -160,16 +160,18 @@ surviving copy — no git config under the project tree, no global credential
 helper, no credential store, nothing in the source archive the project arrived
 in. Nothing in this repository contains it, and it has no remote.
 
-What is **not** established: whether the token was ever revoked, or whose it was.
-The `github_pat_` prefix makes it a fine-grained token, which lives on a separate
-page from classic tokens and is easy to look past. It also authenticated against
-*gamerpuppy's* repository from a `.git` directory that was inherited rather than
-created here, so it may well belong to whoever assembled this project rather than
-to its current owner — in which case revoking it was never theirs to do, and
-notifying that person is the actual remedy.
+**It is not this account's token.** Checked against both the classic and
+fine-grained token pages: nothing there. Combined with the fact that it
+authenticated against *gamerpuppy's* repository from a `.git` directory inherited
+rather than created here, the token belongs to whoever assembled this project
+copy.
 
-Removing local copies does not invalidate a credential. Treat it as live until
-someone confirms otherwise.
+That bounds the exposure but does not close it. Removing local copies does not
+invalidate a credential, and this account cannot revoke one it does not own — so
+the remaining remedy is notifying whoever put the original tree together. Until
+then it should be assumed live, on someone else's account.
+
+Nothing in this repository contains it, and nothing here can leak it further.
 
 ---
 
