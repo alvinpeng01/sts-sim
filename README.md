@@ -23,18 +23,26 @@ been implemented is in [`FULL_RUN_RL_DESIGN.md`](FULL_RUN_RL_DESIGN.md).
 | | |
 |---|---|
 | Best checkpoint | `slay-sim/runs/whole_run_transformer_yield10x_a20_v31.pt` |
-| Ascension 20 | mean floor **23.57** of 56 over 200 seeds; **0 victories** |
+| Ascension 20 | mean floor **23.05** of 56 over 200 seeds; **0 victories** |
 | Ascension 0 | mean floor 39.21 over 100 seeds; **13 victories** |
-| vs. the previous best (v28) | **+1.83 ± 0.55** paired floors at A20 |
-| Tests | 157 passing in 19 files |
+| vs. the previous best (v28, 21.64) | **+1.41 ± 0.50** paired floors at A20 (t = 2.82) |
+| Tests | 185 passing in 21 files |
 
-A20 numbers are post-Armaments-fix; the A0 numbers are pre-fix and not directly
-comparable. See [docs/05-model-lineage.md](docs/05-model-lineage.md).
+A20 numbers were re-baselined 2026-08-01 on the post-rebuild engine; the A0
+numbers predate several engine fixes and are not directly comparable. See
+[docs/05-model-lineage.md](docs/05-model-lineage.md) and the re-baseline table in
+[docs/README.md](docs/README.md).
 
-The measured bottleneck is **training label volume**. Model capacity (4× params)
-and combat search budget (3× sims) were both tested and both bought less than
-raising labels-per-episode did. See
-[docs/06-experiment-log.md](docs/06-experiment-log.md).
+**The binding constraint is the overworld policy, not combat.** Established by
+layer swap: Silverbot's `heart1.pt` overworld policy driving OUR engine and OUR
+combat moved the mean floor 21.29 → 37.00 (**+15.71 ± 3.13**) and produced this
+stack's first A20 victories, with combat byte-identical between the arms. Combat
+search budget, search configuration, and four separate algorithmic changes to the
+search have all since measured flat or negative against floors. Training label
+volume was the *previous* diagnosis and remains the bottleneck for the supervised
+path specifically. See [docs/03-combat-search.md](docs/03-combat-search.md) for
+the layer swap and [docs/06-experiment-log.md](docs/06-experiment-log.md) for the
+label work.
 
 ## Setup
 
@@ -70,7 +78,7 @@ There is no `pyproject.toml`. Make the compiled module importable by putting
 ```bash
 cd slay-sim
 python -c "import slaythespire; print('native engine ok')"
-python -m pytest -q          # 157 tests
+python -m pytest -q          # 185 tests
 ```
 
 The pytest suite covers the pure-Python `sts/` engine and the pipeline glue; the
@@ -97,6 +105,19 @@ python -m lightspeed.run_label_quality_v31 --arm yield --label-scale 10
 The optional in-game overlay and live bridge are covered in
 [docs/09-live-play-bridge.md](docs/09-live-play-bridge.md) and
 `slay-sim/stsmod/README.md`; that half needs only `slay-sim/sts/` and numpy.
+
+## Version control
+
+This tree is a git repository as of 2026-08-01; before that it had none.
+`.gitignore` carries the reasoning per entry, but in short it tracks source,
+tests and build inputs (1,857 files, 1.8 MB) and excludes `silverbot-reference/`
+(348 MB vendored fork), `slay-sim/runs/` (1.3 GB of checkpoints, datasets and
+eval output), the five `sts_lightspeed/build*/` trees, and `*.pt` / `*.pyd` /
+`*.jsonl` / `*.log` by extension — the extension rules are needed because ~25
+checkpoints sit inside `slay-sim/lightspeed/` intermixed with source.
+
+`docs/` is currently **untracked rather than ignored**, pending a decision on
+whether to version it.
 
 ## Not included in transfers
 
