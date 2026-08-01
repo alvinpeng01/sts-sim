@@ -113,13 +113,32 @@ tracked.** `.gitignore` carries per-entry reasoning; in short:
 
 | excluded | why |
 |---|---|
-| `silverbot-reference/` | 348 MB vendored read-only fork — reference only, never developed here |
+| `silverbot-reference/` | 348 MB vendored read-only fork — never developed here, but see the dependency note below |
 | `slay-sim/runs/` | 1.3 GB of checkpoints, datasets, eval output — regenerable |
 | `sts_lightspeed/build*/` | five CMake trees including the `.pyd` |
 | `*.pt` `*.pyd` `*.jsonl` `*.log` | by extension, because ~25 checkpoints sit inside `slay-sim/lightspeed/` intermixed with source |
 
 `docs/` is currently **untracked rather than ignored**, pending a decision on
 whether to version it — `git add docs` is all it takes.
+
+### `silverbot-reference/` is excluded but not optional
+
+It is Daniel Ziegler's Silver Automaton fork, kept as a reference and never
+developed in. Excluding it from git is deliberate, but **a fresh clone will not
+be able to run two harnesses**, and one of them matters a great deal:
+
+| harness | dependency | why it matters |
+|---|---|---|
+| `eval_heart1_hybrid.py` | imports `silverbot.network` / `silverbot.playouts`, loads `../silverbot-reference/runs/heart1.pt` | **This is the layer-swap instrument** — the measurement that established the run policy as the binding constraint, and the tool for judging any future run-policy work |
+| `_silverbot_human_deck.py` | runs silverbot in a separate process against `silverbot-reference/build` (its own compiled module, since both engines' Python modules are named `slaythespire`) | The second arm on the combat benchmark — what turns our HP number into a bracket rather than a bare figure |
+
+Everything else — `compare_tier_combat.py`'s silver arm aside — references the
+fork only in comments. **The test suite does not depend on it**; all 185 tests
+pass without it present.
+
+To restore: obtain the fork, place it at `sts_lightspeed/../silverbot-reference/`,
+and build its native module separately. `_silverbot_human_deck.py` also carries a
+hardcoded absolute Windows path to that build directory.
 
 **Security note, still outstanding.** The original `sts_lightspeed/.git/` had a
 GitHub Personal Access Token embedded in its origin URL
