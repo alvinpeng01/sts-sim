@@ -1,0 +1,11 @@
+{
+  "modid": "stspredictor",
+  "name": "STS Predictor Overlay",
+  "author_list": ["alvin"],
+  "description": "Displays the sts/bridge/ search-based card recommendation as an in-game overlay. Reads ~/sts_latest_recommendation.txt, written by a separate Python process launched by CommunicationMod -- this mod only renders, it never touches game state.",
+  "version": "0.1.0",
+  "sts_version": "07-05-2019",
+  "mts_version": "3.11.0",
+  "dependencies": ["basemod"],
+  "update_json": ""
+}

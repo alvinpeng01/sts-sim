@@ -1,0 +1,20 @@
+{
+  "score": 1.167217948717949,
+  "params": {
+    "c_ucb": 7.8179665956770465,
+    "c_ucb_chance": 0.2032844471574612,
+    "wc_chance": 2.9239021345123555,
+    "wa_chance": 0.14302568688546516,
+    "loss_progress_credit_weight": 396.70330723527553,
+    "brewing_threat_estimate": 26.18433078443602,
+    "attack_base": 7.689375930794582,
+    "attack_finish_off_scale": 13.108578778228125,
+    "attack_block_penalty_scale": 0.17071375519703846,
+    "aoe_bonus": 4.008625661366037,
+    "skill_base": 8.781839534397857,
+    "skill_danger_scale": 8.458158392257245,
+    "skill_haste_penalty": 5.8015201898555215,
+    "power_score": 11.822014078724777,
+    "end_turn_time_warp_risk_score": 0.22378454117189975
+  }
+}

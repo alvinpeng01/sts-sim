@@ -1,0 +1,132 @@
+{
+  "score": 2.118087609571584,
+  "fitness_config": {
+    "hp_fitness_weight": 2.0,
+    "ascension": 20,
+    "sims": 150,
+    "episodes_per_encounter": 20,
+    "seq_halving": true,
+    "encounters": [
+      "JAW_WORM",
+      "TWO_LOUSE",
+      "GREMLIN_GANG",
+      "EXORDIUM_THUGS",
+      "CHOSEN",
+      "SHELLED_PARASITE_AND_FUNGI",
+      "THREE_DARKLINGS",
+      "ORB_WALKER",
+      "GREMLIN_NOB",
+      "THREE_SENTRIES",
+      "CENTURION_AND_HEALER",
+      "SPHERIC_GUARDIAN",
+      "THE_GUARDIAN",
+      "AUTOMATON",
+      "TIME_EATER"
+    ],
+    "deck_resources": {
+      "act1/basic": [
+        50,
+        5,
+        0.3,
+        0,
+        2,
+        0
+      ],
+      "act1/boss": [
+        85,
+        15,
+        0.3,
+        0,
+        4,
+        0
+      ],
+      "act1/elite": [
+        70,
+        10,
+        0.3,
+        0,
+        3,
+        0
+      ],
+      "act2/basic": [
+        90,
+        22,
+        0.4,
+        1,
+        6,
+        1
+      ],
+      "act2/boss": [
+        120,
+        35,
+        0.4,
+        1,
+        8,
+        1
+      ],
+      "act2/elite": [
+        110,
+        28,
+        0.4,
+        1,
+        7,
+        1
+      ],
+      "act3/basic": [
+        100,
+        28,
+        0.5,
+        2,
+        9,
+        2
+      ],
+      "act3/boss": [
+        130,
+        40,
+        0.5,
+        2,
+        11,
+        2
+      ],
+      "act3/elite": [
+        115,
+        32,
+        0.5,
+        2,
+        10,
+        2
+      ]
+    }
+  },
+  "params": {
+    "c_ucb": 8.349572417176457,
+    "c_ucb_chance": 0.5965695885489544,
+    "wc_chance": 3.660741845930017,
+    "wa_chance": 0.6666565304658182,
+    "loss_progress_credit_weight": 566.8092167785617,
+    "brewing_threat_estimate": 21.679089608500558,
+    "attack_base": 3.1891671097752905,
+    "attack_finish_off_scale": 20.401856245120587,
+    "attack_block_penalty_scale": 0.28189914664292287,
+    "aoe_bonus": 9.511972156590303,
+    "skill_base": 2.374276175059592,
+    "skill_danger_scale": 6.540197756638001,
+    "skill_haste_penalty": 7.929274532762268,
+    "power_score": 13.899298991610728,
+    "end_turn_time_warp_risk_score": 0.445702734845292,
+    "skill_haste_danger_threshold": 0.25754205846969774,
+    "per_card_weight_scale": 21.826581758307036,
+    "silver_card_play_prior_weight": 5.0,
+    "boss_silver_card_play_prior_weight": 1.0,
+    "c_puct": 6.010497915483121,
+    "puct_temperature": 3.2108315877993867,
+    "win_hp_weight": 5.411467793313345,
+    "early_act_easy_pool_hp_safety_weight": 1.0,
+    "block_sufficiency_margin": 5.138738256924764,
+    "defensive_card_suppression_penalty": 6.162222570174157,
+    "potion_score_weight": 29.7084714446246,
+    "boss_heal_credit_weight": 0.15334867338906205,
+    "win_turn_penalty_weight": 1.0942430584574216,
+    "alive_monster_penalty_weight": 7.572480602541951
+  }
+}

@@ -1,0 +1,35 @@
+# Vendored read-only fork. 348 MB, someone else's history, referenced by the docs
+# but never developed here (AGENTS.md: "Reference only. Do not develop here.").
+silverbot-reference/
+
+# Datasets, checkpoints, eval outputs and manifests. 1.3 GB, and regenerable.
+slay-sim/runs/
+
+# CMake output, including the .pyd. Five build trees exist (build, build_classfix,
+# build_debug, build_profile, build_repro); build/ is the production one and the
+# rest are stale or special-purpose.
+sts_lightspeed/build*/
+pgo/
+
+# Trained weights and native modules wherever they land -- ~25 checkpoint_*.pt sit
+# in slay-sim/lightspeed/ intermixed with source, so this has to be by extension
+# rather than by directory.
+*.pt
+*.pyd
+*.so
+*.o
+*.obj
+
+# Experiment output: eval rows, progress logs, captures.
+*.jsonl
+*.log
+*.stackdump
+
+# Archives
+*.zip
+
+# Tooling
+__pycache__/
+*.pyc
+.omo/
+.codegraph

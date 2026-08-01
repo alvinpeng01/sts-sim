@@ -1,0 +1,16 @@
+{
+  "score": 0.7877331753214106,
+  "value_params": {
+    "vf_hp": 4.367950023075894,
+    "vf_monster_hp": 0.19859007445148547,
+    "vf_incoming": 2.605689475591845,
+    "vf_block": 4.336202529591503,
+    "vf_energy": 18.40919352810768,
+    "vf_strength": 26.834274099986203,
+    "vf_dexterity": 1.2258993147048152,
+    "vf_alive": 2.5565643611826214,
+    "vf_turn": 0.8024615936626986,
+    "vf_metallicize": 9.017001138815157
+  },
+  "base_params_from": "lightspeed/tuned_search_params.json"
+}
