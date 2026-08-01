@@ -113,7 +113,7 @@ tracked.** `.gitignore` carries per-entry reasoning; in short:
 
 | excluded | why |
 |---|---|
-| `silverbot-reference/` | 348 MB vendored read-only fork — never developed here, but see the dependency note below |
+| `silverbot-reference/` | 348 MB vendored read-only fork — reference material, and nothing tracked here depends on it |
 | `slay-sim/runs/` | 1.3 GB of checkpoints, datasets, eval output — regenerable |
 | `sts_lightspeed/build*/` | five CMake trees including the `.pyd` |
 | `*.pt` `*.pyd` `*.jsonl` `*.log` | by extension, because ~25 checkpoints sit inside `slay-sim/lightspeed/` intermixed with source |
@@ -121,24 +121,23 @@ tracked.** `.gitignore` carries per-entry reasoning; in short:
 `docs/` is currently **untracked rather than ignored**, pending a decision on
 whether to version it — `git add docs` is all it takes.
 
-### `silverbot-reference/` is excluded but not optional
+### No harness depends on an external agent
 
-It is Daniel Ziegler's Silver Automaton fork, kept as a reference and never
-developed in. Excluding it from git is deliberate, but **a fresh clone will not
-be able to run two harnesses**, and one of them matters a great deal:
+The three scripts that required Daniel Ziegler's fork to be present —
+`eval_heart1_hybrid.py`, `collect_heart1_labels.py` and
+`_silverbot_human_deck.py` — were removed on 2026-08-01, so everything tracked
+here runs against this repository alone. All 185 tests pass with no external
+agent installed.
 
-| harness | dependency | why it matters |
-|---|---|---|
-| `eval_heart1_hybrid.py` | imports `silverbot.network` / `silverbot.playouts`, loads `../silverbot-reference/runs/heart1.pt` | **This is the layer-swap instrument** — the measurement that established the run policy as the binding constraint, and the tool for judging any future run-policy work |
-| `_silverbot_human_deck.py` | runs silverbot in a separate process against `silverbot-reference/build` (its own compiled module, since both engines' Python modules are named `slaythespire`) | The second arm on the combat benchmark — what turns our HP number into a bracket rather than a bare figure |
-
-Everything else — `compare_tier_combat.py`'s silver arm aside — references the
-fork only in comments. **The test suite does not depend on it**; all 185 tests
-pass without it present.
-
-To restore: obtain the fork, place it at `sts_lightspeed/../silverbot-reference/`,
-and build its native module separately. `_silverbot_human_deck.py` also carries a
-hardcoded absolute Windows path to that build directory.
+**The findings those harnesses produced remain valid and are recorded in
+[`docs/`](docs/README.md)** — the layer swap (+15.71 ± 3.13 floors), the
+combat bracket against a second agent, and the routing-coefficient comparison.
+**They are no longer reproducible in-tree.** The layer swap in particular is the
+measurement behind this project's stated top priority, so anyone revisiting that
+conclusion will need to reconstruct the harness. What it did was mechanically
+simple: drive our `GameContext` with an external overworld policy while
+`native_playout_current_battle` owns every combat decision, which holds combat
+byte-identical and isolates the run layer.
 
 **Security note, still outstanding.** The original `sts_lightspeed/.git/` had a
 GitHub Personal Access Token embedded in its origin URL
@@ -298,6 +297,45 @@ Not worth doing, with reasons in the docs: tree reuse (1.34× ceiling), state
 merging, fixing Runic Dome clairvoyance (3% of runs, makes them harder).
 
 ---
+
+## Acknowledgements
+
+The C++ engine is a fork of **gamerpuppy's** RNG-accurate `sts_lightspeed`, which
+is what makes any of this possible — an engine that reproduces the real game's
+random number generation exactly, so a simulated run and a real one from the same
+seed agree.
+
+**Daniel Ziegler's Silver Automaton** was a significant source of inspiration.
+It is an independent, considerably more mature Slay the Spire agent, and several
+ideas here came from studying it. Named where they appear in the code, the
+notable ones:
+
+- **The "we have enough block" gate.** `HeuristicContext::blockSufficient` is a
+  port of their `SimpleAgent`'s block heuristic, found while investigating why
+  our rollouts finished fights with less HP than theirs at matched simulation
+  counts. It is live in the shipped config.
+- **The card play-priority prior.** `silverCardPlayRank` is their 133-card
+  ordering, used as a per-card term in the rollout heuristic
+  (`silver_card_play_prior_weight`, tuned to 5.0).
+- **The allocation-free rollout.** `nativeHeuristicPickFast` scans the hand
+  without materialising a legal-action vector, the same idea as their
+  `SimpleAgent::chooseBattleCardPlay`. That path was 71.7% of simulation cost.
+- **Draw-order clairvoyance.** They found this defect in their own engine first
+  and measured it at roughly +34pp before removing it. We would not have gone
+  looking otherwise.
+- **The routing diagnostics.** `_routing_audit.py`'s conditional logit and
+  `--randomize-paths` intervention are both borrowed from their map program, and
+  their published coefficients are the reference our policy is measured against.
+- **Validating against the real game.** Their "source audit + live bridge"
+  programme is what prompted checking this engine against the game's own
+  bytecode, which found four monster behaviours, seven inert relics and two card
+  costs.
+
+Their fork is not required to build or test anything here, and no tracked code
+depends on it.
+
+The human benchmark replays 100 Ascension 20 Heart runs by **Baalorlord**, used
+as a ground-truth reference for combat quality.
 
 ## Reading order
 
