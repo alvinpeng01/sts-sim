@@ -14,9 +14,6 @@ one author's reading of the game's rules, and would miss the bugs this engine
 actually produces. Every card defect found here so far was an INTERACTION or
 STATE bug that static auditing passed:
 
-  - unplayable status cards are legal plays that leave the hand for free, because
-    their -2 cost sentinel satisfies an `energy >= cost` gate (open; see
-    docs/07-known-issues.md)
   - five CardSelectTasks returned empty action vectors, segfaulting a Silent
     playout
   - four cards had their `case` in a switch `useCard` never routes them to, so
@@ -196,28 +193,41 @@ def test_card_select_states_resolve(color, name, card_id):
         f"{captured.text.strip()[:200]}")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "FIXED IN SOURCE, NOT YET IN THE BINARY. CardInstance::canUse now carries a "
-    "`costForTurn < -1` guard, but the .pyd could not be relinked while a "
-    "training run held it. This marker documents the stale binary, not the "
-    "defect -- REMOVE IT in the same change that rebuilds the engine, or "
-    "strict=True will turn the fix into a red suite. Original defect: unplayable "
-    "cards carry cost -2, `energy < -2` is false for any non-negative energy, so "
-    "the gate passed them through and playing one freed a hand slot. Inherited "
-    "unchanged from upstream. See docs/07-known-issues.md."))
-def test_unplayable_cards_are_not_legal():
-    """A card the game marks unplayable must never be offered as an action."""
-    offenders = []
-    for color in ("GREEN", "BLUE", "PURPLE", "CURSE"):
-        character = CLASS_BY_COLOR.get(color, sts.CharacterClass.SILENT)
-        for name, card_id in _cards_of(color):
-            battle = _battle_with(card_id, character)
-            if not battle.hand:
-                continue
-            if battle.hand[0].cost >= 0:
-                continue
-            if _card_actions(battle, card_id):
-                offenders.append(name)
-    assert not offenders, (
-        f"{len(offenders)} unplayable cards are legal to play: "
-        f"{sorted(offenders)[:12]}")
+def test_status_and_curse_playability_follows_the_relics():
+    """Status and curse cards are playable exactly when the relic says so.
+
+    This replaces a test that asserted unplayable cards are never legal, which is
+    false and was written on a misreading. Void turning up as a legal play in a
+    benchmark fight looked like the -2 cost sentinel defeating an
+    `energy >= cost` gate. It was not: the player held **Medical Kit**, and
+    `CardInstance::canUse` was already correct --
+
+        case CardType::STATUS:
+            if (!bc.player.hasRelic<RelicId::MEDICAL_KIT>() && id != CardId::SLIMED)
+
+    -- including the subtlety that Slimed is exempt, because Slimed is playable
+    with no relic at all. Blue Candle does the same for curses. The lesson worth
+    keeping: a conditional that fires in one fight out of 1,730 is a CONDITION,
+    not a rare bug.
+    """
+    status_card, curse_card = sts.CardId.WOUND, sts.CardId.CLUMSY
+
+    def legal_with(card_id, relic):
+        gc = sts.GameContext(sts.CharacterClass.IRONCLAD, SEED, 20)
+        for _ in range(len(gc.deck)):
+            gc.remove_card(0)
+        for _ in range(DECK_COPIES):
+            gc.obtain_card(sts.Card(sts.CardId(card_id)))
+        if relic is not None:
+            gc.obtain_relic(relic)
+        battle = sts.new_battle(gc, ENCOUNTER)
+        return bool(_card_actions(battle, int(card_id)))
+
+    assert not legal_with(status_card, None), "Wound is playable with no relic"
+    assert legal_with(status_card, sts.RelicId.MEDICAL_KIT), (
+        "Medical Kit does not make Status cards playable")
+    assert not legal_with(curse_card, None), "Clumsy is playable with no relic"
+    assert legal_with(curse_card, sts.RelicId.BLUE_CANDLE), (
+        "Blue Candle does not make Curse cards playable")
+    # Slimed is a Status card that needs no relic -- the exemption in canUse.
+    assert legal_with(sts.CardId.SLIMED, None), "Slimed should be playable unaided"

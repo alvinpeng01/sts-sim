@@ -344,22 +344,6 @@ bool CardInstance::canUse(const BattleContext &bc, int target, const bool inAuto
             break;
     }
 
-    // Unplayable cards are marked with a NEGATIVE cost sentinel, and the energy
-    // check below cannot reject them: `energy < -2` is false for any non-negative
-    // energy, so Wound, Burn, Dazed and Void were legal plays that left the hand
-    // for free -- a hand-thin the real game never grants. Inherited from upstream,
-    // where the same line and the same -2 sentinel appear unchanged.
-    //
-    // The distinction that makes this a guard rather than `costForTurn < 0`:
-    //   -1  X-cost (Whirlwind, Skewer, Multi-Cast, ...) -- PLAYABLE, spends all
-    //       energy, and is resolved elsewhere. See Cards.h's isXCost.
-    //   -2  unplayable status card
-    //   -3  unplayable curse
-    // Blocking everything negative would make every X-cost card unplayable.
-    if (costForTurn < -1) {
-        return false;
-    }
-
     if (bc.player.energy < costForTurn && !isFreeToPlay(bc) && !inAutoplay) {
         return false;
     }

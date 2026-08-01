@@ -188,7 +188,6 @@ in-tree.
 | finding | measurement |
 |---|---|
 | The overworld policy is the binding constraint † | +15.71 ± 3.13 floors from swapping only that layer |
-| **Unplayable status/curse cards can be played, for free** | `Void`/`Wound`/`Burn`/`Dazed` are legal actions that leave the hand at no energy cost — a free discard the real game never grants |
 | The combat search is **draw-order clairvoyant** | −3.78 ± 0.84 HP/fight when blinded; our apparent lead over Silverbot was this cheat |
 | The borrowed play-priority table was load-bearing | removing it costs **−1.20 ± 0.49 HP** (t = −2.45) on 500 paired train fights |
 | Relic power level dominates combat tuning | +0.406 win rate at the encounter level, z = 8.10 — an order of magnitude above any other combat lever |
@@ -332,16 +331,6 @@ removed from hand).
 
 Roughly in order of expected value.
 
-0. **Unplayable status and curse cards can be played, for free.** `Void`, `Wound`,
-   `Burn` and `Dazed` are legal actions; playing one removes it from hand and
-   costs no energy. The search finds and exploits it. The cause is the cost
-   sentinel: these carry `cost = -2`, and the playability gate is
-   `energy >= cost`, which is true for any non-negative energy — so the check
-   passes instead of failing. Same class as the draw-order clairvoyance, but with
-   **no upside**: it is a correctness bug, it inflates every number measured on a
-   status-bearing deck, and fixing it should cost nothing but the inflation. Listed
-   first because it is cheap, and because it invalidates baselines, so it wants to
-   land in one batch with a re-baseline.
 1. **On-policy RL for the run policy.** Imitation is refuted and representation is
    closed, leaving this as the path to the +15.71 floors the layer swap proved
    available. Episodes are cheap (0.54 s at 100 combat sims); the update is the
