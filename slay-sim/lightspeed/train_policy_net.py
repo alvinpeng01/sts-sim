@@ -39,6 +39,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .search_config import apply_search_config, load_search_config
+from .paths import native_build_path
 
 # Same roster tune_search_cma.py trains the hand-tuned heuristic weights against --
 # using a different set here would mean this net learns to imitate search on a
@@ -110,7 +111,7 @@ def _worker_collect(args) -> list:
 
 def collect_dataset() -> List[PolicyDecision]:
     import sys
-    sys.path.insert(0, r"C:\Users\Alvin\grok\sts-project\sts_lightspeed\build")
+    sys.path.insert(0, native_build_path())
     import slaythespire as sts
     from lightspeed.env import build_full_encounter_resources
     from lightspeed.cards import weighted_ironclad_deck

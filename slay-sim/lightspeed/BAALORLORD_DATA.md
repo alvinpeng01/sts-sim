@@ -6,9 +6,9 @@ strategic prior. Combat remains entirely owned by the native expectimax MCTS.
 ## Import
 
 ```powershell
-$env:PYTHONPATH='C:\Users\Alvin\grok\sts-project\sts_lightspeed\build'
+$env:PYTHONPATH='<repo>\sts_lightspeed\build'
 python -m lightspeed.import_baalorlord_runs `
-  --input 'C:\Users\Alvin\Documents\Codex\2026-07-29\baalorlord-run-dataset\outputs\baalorlord_ironclad_a20_heart_20runs.jsonl' `
+  --input '<archive>\outputs\baalorlord_ironclad_a20_heart_20runs.jsonl' `
   --out runs/baalorlord_a20_human_train_v1.pt `
   --validation-out runs/baalorlord_a20_human_validation_v1.pt `
   --audit runs/baalorlord_a20_human_split_v1.audit.json

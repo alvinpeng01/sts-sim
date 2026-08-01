@@ -27,8 +27,6 @@
     "end_turn_time_warp_risk_score": 15.720662866861767,
     "skill_haste_danger_threshold": 0.1823132795025763,
     "per_card_weight_scale": 23.1386912177827,
-    "silver_card_play_prior_weight": 4.268140869726993,
-    "boss_silver_card_play_prior_weight": 3.8649766329513087,
     "c_puct": 4.8105944103494025,
     "puct_temperature": 2.9396429017435652,
     "win_hp_weight": 8.272281046426038,
@@ -51,6 +49,8 @@
     "self_damage_score_penalty": 3.571703199131879,
     "attack_damage_score_weight": 0.02581749048140904,
     "block_weight": 4.139473569401696,
-    "win_bonus_weight": 0.9352342744380862
+    "win_bonus_weight": 0.9352342744380862,
+    "silver_card_play_prior_weight": 4.268140869726993,
+    "boss_silver_card_play_prior_weight": 3.8649766329513087
   }
 }

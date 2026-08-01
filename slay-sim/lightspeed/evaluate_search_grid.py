@@ -8,7 +8,7 @@ resource we are trying to improve.
 Example (from ``slay-sim``):
 
     PYTHONPATH=".;../sts_lightspeed/build" python -m lightspeed.evaluate_search_grid \
-        --param silver_card_play_prior_weight --values 1 3 5
+        --param attack_finish_off_scale --values 5 12 20
 """
 
 from __future__ import annotations
@@ -44,8 +44,6 @@ def parse_args() -> argparse.Namespace:
                         help="also screen the three calibrated boss fights")
     parser.add_argument("--act1-easy-pool", action="store_true",
                         help="screen only the first-three-fights Act 1 pool")
-    parser.add_argument("--boss-value", type=float,
-                        help="hold boss_silver_card_play_prior_weight at this value")
     return parser.parse_args()
 
 
@@ -82,8 +80,6 @@ def main() -> None:
 
     for value in args.values:
         sts.set_search_params({args.param: value})
-        if args.boss_value is not None:
-            sts.set_search_params({"boss_silver_card_play_prior_weight": args.boss_value})
         totals = {"wins": 0, "hp_fraction": 0.0, "score": 0.0, "fights": 0}
         by_encounter: dict[str, dict[str, float]] = defaultdict(
             lambda: {"wins": 0, "hp_fraction": 0.0, "fights": 0}

@@ -24,11 +24,12 @@ import slaythespire as sts
 
 from ._human_deck_combat import build_battle, play
 from .search_config import DEFAULT_SEARCH_CONFIG_PATH, ensure_search_config
+from .paths import HUMAN_BENCHMARK
 
 # The 100-run, potion-inclusive benchmark with a 60/20/20 split by run.
 # The 20-run file this used to point at had no potions (worth 4.7 HP) and
 # only a 14/6 train/test split.
-BENCHMARK_PATH = r"C:\Users\Alvin\grok\sts-project\slay-sim\runs\human_fight_benchmark_100.json"
+BENCHMARK_PATH = str(HUMAN_BENCHMARK)
 
 
 def run_split(fights, sims: int, ascension: int) -> list[dict]:

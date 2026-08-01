@@ -37,8 +37,9 @@ import slaythespire as sts
 
 from ._human_deck_combat import build_battle
 from .search_config import DEFAULT_SEARCH_CONFIG_PATH, ensure_search_config
+from .paths import HUMAN_BENCHMARK
 
-BENCHMARK_PATH = r"C:\Users\Alvin\grok\sts-project\slay-sim\runs\human_fight_benchmark_100.json"
+BENCHMARK_PATH = str(HUMAN_BENCHMARK)
 
 
 def shuffle_draw_pile(bc, rng: random.Random) -> None:

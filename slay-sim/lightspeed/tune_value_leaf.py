@@ -28,6 +28,7 @@ import cma
 import numpy as np
 
 from .search_config import apply_search_config, load_search_config
+from .paths import native_build_path
 
 TIME_BUDGET_SECONDS = 2 * 60 * 60
 N_EPISODES_PER_ENCOUNTER = 15
@@ -120,7 +121,7 @@ def _evaluate_candidate(args) -> float:
 
 def main():
     import sys
-    sys.path.insert(0, r"C:\Users\Alvin\grok\sts-project\sts_lightspeed\build")
+    sys.path.insert(0, native_build_path())
     import slaythespire as sts
 
     defaults = sts.get_search_params()

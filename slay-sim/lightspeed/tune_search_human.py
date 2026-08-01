@@ -64,12 +64,14 @@ import numpy as np
 
 from .tune_search_cma import (ADDITIVE_BOUNDS, PARAM_NAMES as BASE_PARAM_NAMES,
                               _param_kind, raw_value)
+from .paths import (HUMAN_BENCHMARK, LIGHTSPEED_DIR, RUNS_DIR,
+                    native_build_path)
 
 # MUST be a module-level constant, not a flag: workers are spawned (not forked)
 # on Windows, so they re-import this module and never see anything main() sets.
-BENCHMARK_PATH = r"C:\Users\Alvin\grok\sts-project\slay-sim\runs\human_fight_benchmark_100.json"
-OUT_PATH = r"C:\Users\Alvin\grok\sts-project\slay-sim\runs\tuned_search_human.json"
-LOG_PATH = r"C:\Users\Alvin\grok\sts-project\slay-sim\lightspeed\tune_search_human_progress.log"
+BENCHMARK_PATH = str(HUMAN_BENCHMARK)
+OUT_PATH = str(RUNS_DIR / "tuned_search_human.json")
+LOG_PATH = str(LIGHTSPEED_DIR / "tune_search_human_progress.log")
 
 SIMS = 100
 SIGMA0 = 0.15
@@ -110,7 +112,6 @@ NEWLY_TUNED = [
     "block_weight",
     "win_bonus_weight",
     "early_act_easy_pool_hp_safety_weight",
-    "boss_silver_card_play_prior_weight",
 ]
 # The rollout's potion branch is deliberately NOT here, and neither are mast_weight,
 # seq_halving_candidates or backup_max_weight. All exist in the engine, all default to
@@ -135,9 +136,6 @@ EXTRA_ADDITIVE_BOUNDS = {
     # here because its compiled default is a real value rather than an off-state.
     "win_bonus_weight": (0.0, 5.0),
     "early_act_easy_pool_hp_safety_weight": (0.0, 5.0),
-    # Negative compiled default (-1.0) means "use the general weight instead", so
-    # the range has to reach below zero to keep that option available.
-    "boss_silver_card_play_prior_weight": (-1.0, 10.0),
 }
 
 _ROLLOUT_T_IDX = PARAM_NAMES.index("rollout_temperature")
@@ -232,7 +230,7 @@ def _fitness_config() -> dict:
 def _worker_init() -> None:
     global _worker_fights, _worker_val
     import sys
-    sys.path.insert(0, r"C:\Users\Alvin\grok\sts-project\sts_lightspeed\build")
+    sys.path.insert(0, native_build_path())
     import slaythespire as sts  # noqa: F401 - imported so the child has it loaded
     from lightspeed.search_config import (DEFAULT_SEARCH_CONFIG_PATH,
                                           ensure_search_config)
@@ -298,7 +296,7 @@ def main() -> None:
     LOG_PATH = args.log
 
     import sys
-    sys.path.insert(0, r"C:\Users\Alvin\grok\sts-project\sts_lightspeed\build")
+    sys.path.insert(0, native_build_path())
     import slaythespire as sts
 
     # Native compiled defaults, captured BEFORE the shipped config is applied.

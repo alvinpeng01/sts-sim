@@ -31,6 +31,8 @@ options offered, and which one he took.
 """
 from __future__ import annotations
 
+import os
+
 import argparse
 import collections
 import json
@@ -40,8 +42,12 @@ import slaythespire as sts
 from .import_baalorlord_runs import ReconstructedRun, resolve_card
 from .whole_run_env import WholeRunEnv
 
-ARCHIVE = (r"C:\Users\Alvin\Documents\Codex\2026-07-29\baalorlord-run-dataset"
-           r"\outputs\baalorlord_ironclad_a20_heart_100runs.jsonl")
+# The run archive is external to this repository, so unlike every other path
+# here it cannot be derived from __file__. Set STS_BAALOR_ARCHIVE or pass
+# --archive. Empty rather than a fallback: a stale default would either read
+# someone else's file or fail with a path that means nothing to whoever is
+# running it.
+ARCHIVE = os.environ.get("STS_BAALOR_ARCHIVE", "")
 
 SEED_CHARS = "0123456789ABCDEFGHIJKLMNPQRSTUVWXYZ"
 
@@ -442,7 +448,8 @@ def replay(run_rows, sims: int, ascension: int, max_steps: int = 2000,
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--archive", default=ARCHIVE)
+    parser.add_argument("--archive", default=ARCHIVE,
+                        help="run archive .jsonl; defaults to $STS_BAALOR_ARCHIVE")
     parser.add_argument("--runs", type=int, default=0, help="0 = all")
     parser.add_argument("--start", type=int, default=0,
                         help="skip this many runs. The engine SEGFAULTS on at "

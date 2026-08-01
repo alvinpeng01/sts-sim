@@ -33,6 +33,7 @@ Run:  PYTHONPATH=".;../sts_lightspeed/build" python -m lightspeed.tune_search_cm
 """
 
 from __future__ import annotations
+from .paths import native_build_path
 
 import argparse
 import json
@@ -108,7 +109,6 @@ PARAM_NAMES = [
     # A normalized version of Silver Automaton's hand-crafted combat card order,
     # added after passing two independent paired A20 gates at weight 1.0. Its
     # compiled default is the additive off-state, so CMA-ES tunes raw units.
-    "silver_card_play_prior_weight",
     # PUCT-style prior bonus added to nativeSelectIdx on top of UCB1 (see slaythespire.cpp's
     # g_params.cPuct comment). c_puct's natural off-state is 0.0 (additive, like
     # per_card_weight_scale) -- puct_temperature only matters once c_puct is nonzero, so it's a
@@ -206,7 +206,6 @@ PARAM_NAMES = [
 PARAM_KIND = {
     "attack_finish_off_scale": "signed_mult",
     "per_card_weight_scale": "additive",
-    "silver_card_play_prior_weight": "additive",
     "c_puct": "additive",
     "direct_block_score_weight": "additive",
     "vulnerable_apply_bonus": "additive",
@@ -224,7 +223,6 @@ ADDITIVE_BOUNDS = {
     "per_card_weight_scale": (-5.0, 25.0),
     # Small values complement the reward-screen pick-rate prior; values >=2
     # regressed in the first A20 screen, so keep the joint search focused.
-    "silver_card_play_prior_weight": (0.0, 5.0),
     # Non-negative only: a negative PUCT weight would penalize actions the heuristic prior favors,
     # inverting rather than sharpening it -- not a meaningful direction to explore. Upper bound
     # picked so the prior term can plausibly dominate the existing UCB1 term (which is O(c_ucb),
@@ -424,7 +422,7 @@ def main():
     LOG_PATH = args.log
     PREV_TUNED_PATH = args.warm_start
     import sys
-    sys.path.insert(0, r"C:\Users\Alvin\grok\sts-project\sts_lightspeed\build")
+    sys.path.insert(0, native_build_path())
     import slaythespire as sts
 
     defaults = sts.get_search_params()  # the ORIGINAL hand-tuned C++ defaults -- x-space is always relative to THESE, never to the previous run's result, so a warm-started x0 stays on the same scale as PARAM_NAMES/bounds always assumed
