@@ -152,10 +152,24 @@ simple: drive our `GameContext` with an external overworld policy while
 byte-identical and isolates the run layer.
 
 **Security note.** The original `sts_lightspeed/.git/` carried a GitHub Personal
-Access Token embedded in its origin URL. That history was discarded, and no git
-config, credential helper or credential store on this machine holds it any longer
-— verified. **The token itself still had to be revoked on GitHub**, since removing
-local copies does not invalidate a credential.
+Access Token embedded in its origin URL, of the form
+`https://github_pat_...@github.com/gamerpuppy/sts_lightspeed.git`.
+
+What is verified: that history was discarded, and searching this machine found no
+surviving copy — no git config under the project tree, no global credential
+helper, no credential store, nothing in the source archive the project arrived
+in. Nothing in this repository contains it, and it has no remote.
+
+What is **not** established: whether the token was ever revoked, or whose it was.
+The `github_pat_` prefix makes it a fine-grained token, which lives on a separate
+page from classic tokens and is easy to look past. It also authenticated against
+*gamerpuppy's* repository from a `.git` directory that was inherited rather than
+created here, so it may well belong to whoever assembled this project rather than
+to its current owner — in which case revoking it was never theirs to do, and
+notifying that person is the actual remedy.
+
+Removing local copies does not invalidate a credential. Treat it as live until
+someone confirms otherwise.
 
 ---
 
