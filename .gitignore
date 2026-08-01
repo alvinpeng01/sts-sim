@@ -33,3 +33,6 @@ __pycache__/
 *.pyc
 .omo/
 .codegraph
+
+# Documentation, deliberately not published -- see the README note.
+docs/

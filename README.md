@@ -15,9 +15,16 @@ Two directories, one pybind11 boundary:
   training pipeline, the evaluation harnesses, a second independent pure-Python
   STS engine used for tests and the live-game bridge, and a BaseMod overlay.
 
-Full documentation is in [`docs/`](docs/README.md). Design intent that has **not**
-been implemented is in [`FULL_RUN_RL_DESIGN.md`](FULL_RUN_RL_DESIGN.md).
-Conventions and hazards for anyone changing code are in [`AGENTS.md`](AGENTS.md).
+Design intent that has **not** been implemented is in
+[`FULL_RUN_RL_DESIGN.md`](FULL_RUN_RL_DESIGN.md). Conventions and hazards for
+anyone changing code are in [`AGENTS.md`](AGENTS.md).
+
+> **On `docs/`.** This README cites a `docs/` tree — twelve files recording every
+> measurement, the harness behind each, and the reasoning connecting them. **It is
+> not published in this repository.** References to `docs/…` below are to material
+> kept outside it, and are left in place because they say precisely where a claim
+> came from. Everything asserted here is also backed by a harness under
+> `slay-sim/lightspeed/`, which *is* published.
 
 ---
 
@@ -113,7 +120,7 @@ python -m lightspeed.eval_whole_run_policy runs/whole_run_transformer_outcome_a2
 ## Repository and version control
 
 Under git as of 2026-08-01; before that it had none. **1,857 files, 1.8 MB
-tracked.** `.gitignore` carries per-entry reasoning; in short:
+tracked**, MIT licensed. `.gitignore` carries per-entry reasoning; in short:
 
 | excluded | why |
 |---|---|
@@ -121,9 +128,10 @@ tracked.** `.gitignore` carries per-entry reasoning; in short:
 | `slay-sim/runs/` | 1.3 GB of checkpoints, datasets, eval output — regenerable |
 | `sts_lightspeed/build*/` | five CMake trees including the `.pyd` |
 | `*.pt` `*.pyd` `*.jsonl` `*.log` | by extension, because ~25 checkpoints sit inside `slay-sim/lightspeed/` intermixed with source |
+| `docs/` | the documentation tree, deliberately unpublished |
 
-`docs/` is currently **untracked rather than ignored**, pending a decision on
-whether to version it — `git add docs` is all it takes.
+`docs/` is **ignored** — see the note at the top of this file. It exists in the
+working tree and is not published.
 
 ### No harness depends on an external agent
 
@@ -134,7 +142,7 @@ here runs against this repository alone. All 185 tests pass with no external
 agent installed.
 
 **The findings those harnesses produced remain valid and are recorded in
-[`docs/`](docs/README.md)** — the layer swap (+15.71 ± 3.13 floors), the
+`docs/README.md`** — the layer swap (+15.71 ± 3.13 floors), the
 combat bracket against a second agent, and the routing-coefficient comparison.
 **They are no longer reproducible in-tree.** The layer swap in particular is the
 measurement behind this project's stated top priority, so anyone revisiting that
@@ -143,11 +151,11 @@ simple: drive our `GameContext` with an external overworld policy while
 `native_playout_current_battle` owns every combat decision, which holds combat
 byte-identical and isolates the run layer.
 
-**Security note, still outstanding.** The original `sts_lightspeed/.git/` had a
-GitHub Personal Access Token embedded in its origin URL
-(`https://github_pat_...@github.com/gamerpuppy/sts_lightspeed.git`). **That token
-should be treated as compromised and rotated.** The repository created today has
-no remote configured; that does not change the exposure.
+**Security note.** The original `sts_lightspeed/.git/` carried a GitHub Personal
+Access Token embedded in its origin URL. That history was discarded, and no git
+config, credential helper or credential store on this machine holds it any longer
+— verified. **The token itself still had to be revoked on GitHub**, since removing
+local copies does not invalidate a credential.
 
 ---
 
@@ -155,7 +163,7 @@ no remote configured; that does not change the exposure.
 
 The value of this project is largely in what has been *ruled out*. Most rows are
 backed by a harness under `slay-sim/lightspeed/` — see
-[docs/README.md](docs/README.md) for the full script table. Rows marked † were
+`docs/README.md` for the full script table. Rows marked † were
 produced by a harness that has since been removed and are no longer reproducible
 in-tree.
 
@@ -194,7 +202,7 @@ in-tree.
 
 ### Measurement traps this project has actually fallen into
 
-Read [docs/04-evaluation.md](docs/04-evaluation.md) before comparing two numbers.
+Read `docs/04-evaluation.md` before comparing two numbers.
 The short list:
 
 - **Validation NLL picks the wrong epoch.** It has done so three runs running.
@@ -343,6 +351,19 @@ merging, fixing Runic Dome clairvoyance (3% of runs, makes them harder).
 
 ---
 
+## Licence
+
+MIT — see [`LICENSE`](LICENSE).
+
+`sts_lightspeed/` is a fork of gamerpuppy's engine and retains its own upstream
+notice at `sts_lightspeed/LICENSE.md` (MIT, Copyright © 2021 gamerpuppy), as MIT
+requires. The vendored `json/` (nlohmann) and `pybind11/` trees keep theirs; eight
+licence files are tracked in total.
+
+No code or data from Silver Automaton remains in this repository — the one item
+that was theirs rather than an idea, a curated card play-priority table, was
+removed on 2026-08-01. See Acknowledgements.
+
 ## Acknowledgements
 
 The C++ engine is a fork of **gamerpuppy's** RNG-accurate `sts_lightspeed`, which
@@ -388,18 +409,18 @@ as a ground-truth reference for combat quality.
 
 ## Reading order
 
-1. [docs/01-architecture.md](docs/01-architecture.md) — what the pieces are and
-   which one is authoritative.
-2. [docs/02-training-pipeline.md](docs/02-training-pipeline.md) — how a label is
-   made and how the model is trained.
-3. [docs/04-evaluation.md](docs/04-evaluation.md) — before you compare two
-   numbers.
-4. [docs/03-combat-search.md](docs/03-combat-search.md) — the search, its tuning,
-   and its long dead-ends table.
-5. [docs/07-known-issues.md](docs/07-known-issues.md) — open defects and
-   behavioural weaknesses.
-6. [AGENTS.md](AGENTS.md) — conventions and hazards, if you are going to change
-   code.
+The documentation tree is not published (see the note at the top), so for anyone
+working from this repository alone:
 
-A claim in the docs without either a file:line reference or a harness in
-[docs/README.md](docs/README.md)'s script table should be treated as unverified.
+1. [`AGENTS.md`](AGENTS.md) — conventions, layout, and the hazards that have
+   already cost time. Read this first if you are going to change code.
+2. `sts_lightspeed/bindings/slaythespire.cpp` — the search. Long, and heavily
+   commented with the measurement that motivated each parameter.
+3. `slay-sim/lightspeed/whole_run_env.py` and `whole_run_transformer*.py` — the
+   overworld environment and policy.
+4. `slay-sim/lightspeed/_*.py` — the audit and measurement harnesses. Every claim
+   in this README traces to one of these; their docstrings carry the reasoning.
+
+A claim without either a file:line reference or a harness behind it should be
+treated as unverified.
+
