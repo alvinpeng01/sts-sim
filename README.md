@@ -262,6 +262,45 @@ The short list:
 
 ## Recent updates
 
+### 2026-08-02
+
+**The combat deficit decomposed, and it is deaths.** Full train split, k = 3,
+honest regime: fights with ≥1 death sum to −13,747 HP of a −13,267 total —
+fights we survive are net **+480**. Six encounters carry 57% (Heart −32.6/fight
+with 150/180 seed-deaths, Shield+Spear, Reptomancer, Time Eater, Nemesis,
+Automaton). An identical clairvoyant pass splits the cause: **47% of the deficit
+survives perfect information** (the Heart is 27.5% informational, Automaton
+10.9% — evaluation-strength losses), while the 1,446 ordinary fights go −3.95 →
+−0.73 (almost purely informational). Truncation at `search_max_turns` is dead:
+16 fights of 1,730, −9 HP. Recorded in `docs/03-combat-search.md`; the standing
+implication is that aggregate-mean tuning cannot see the death mass at all.
+
+**The play-priority slot refilled from our own data, and it shipped** — the
+first combat intervention of twelve to survive validation. Conditional logit
+over 32,728 of our own search decisions (prior disabled during collection);
+monotone dose-response on train saturating at +0.80 ± 0.35; pre-registered val
+gate passed at **+0.73 ± 0.36 (t = +2.06)**, deaths 86.0 → 79.7. Shipped as
+`card_play_prior_weight = 4.5`. On the six killer encounters it measures
++1.12 ± 0.62 with deaths 519 → 495 — consistent everywhere, but the Heart
+itself barely moves (230 → 223 of 300): card ordering is not what kills us
+there.
+
+**Routing and drafting closed as axes** — see the refuted table: three-round
+routing probe (best arm decayed +0.50 → +0.41 → −0.08 as n grew), flat and
+selective skip biases (loss tracks skip volume, indifferent to targeting; more
+cards is more floors for this agent).
+
+**Canonical draw-pile belief search refuted; a real bug found looking.** Lazy
+re-permutation after every draw (the unordered-pile semantics) measures
++0.48 ± 0.58 against per-sample orders. The bug: card-select and scry actions
+index the draw pile by position, and the honest-mode permutation ran between
+enumeration and execution, re-pointing the index. Fixed and pinned by
+`tests/test_honest_draw_pile.py`.
+
+**`paired_determinization` implemented** (default off): keys the honest-regime
+permutation by root-candidate visit index so sequential halving compares
+candidates across the same sampled futures. Verdict pending.
+
 ### 2026-08-01
 
 **Version control established** — the tree had none. Two commits: baseline
@@ -357,11 +396,8 @@ ordering, re-encoded — verified as 132 of 133 entries matching their list exac
 Removed to avoid carrying their data, at a measured cost of −1.20 ± 0.49 HP.
 `_fit_play_priority.py` refills the slot from our own search via a conditional
 logit over the cards available at each decision, which ranks Corruption, Fiend
-Fire, Immolate and Uppercut at the top; it is **not wired in**, because its data
-was collected on the engine that still has the status-card bug.
-
-**Unplayable cards are playable** — see Open problems. Found while chasing an
-anomaly in that fit, and the most consequential thing on this list.
+Fire, Immolate and Uppercut at the top. **Wired in and shipped 2026-08-02**
+after passing its pre-registered val gate — see that day's entry.
 
 ### 2026-07-31
 
