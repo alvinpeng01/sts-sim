@@ -216,6 +216,7 @@ in-tree.
 | Progressive widening explains that flat honest response | **Refuted on val.** Looked like +4.27 ± 1.21 (t = 3.52) on a disjoint *train* slice; on val neither the grid best nor the hand-picked setting beats shipped (−0.69 ± 1.01 and −1.60 ± 0.93). Confirming on train is not confirming |
 | Survival-weighted route planning (elite weight 3.0) | **−3.68 ± 1.10** floors, elite capture 3.3% → 89.2% |
 | A canonical (unordered) draw pile beats a per-sample ordered one | **+0.48 ± 0.58** (t = 0.84) on 150 train fights at k = 3 — inside the noise floor. See below |
+| Inference-time routing biases (ELITE, REST, hp-conditioned REST) | **Refuted on three disjoint seed sets.** Best arm decayed +0.50 → +0.41 → **−0.08 ± 0.16** as n went 120 → 350 → 800; combined +0.10 ± 0.13. The bias fired (rests/run 3.79 → 4.15) and bought nothing |
 
 ### Measurement traps this project has actually fallen into
 
@@ -243,6 +244,17 @@ The short list:
   per-fight sd 13.73 → 7.82 and the spurious t to 0.86. `_param_ab.py` defaults
   to `--seeds 3`; **effects of 1–2 HP measured at one seed are not
   distinguishable from noise**, which covers most of the combat results here.
+- **A sub-t=2 result that survives one replication is still probably nothing.**
+  The routing-bias probe read +0.50 ± 0.44 at n = 120, then +0.41 ± 0.25 at
+  n = 350 on fresh seeds — two independent seed sets agreeing on sign and
+  magnitude, which feels like confirmation. At n = 800 it was **−0.08 ± 0.16**.
+  Every estimate sat inside the previous round's error bar; nothing was ever
+  inconsistent, the early rounds were simply underpowered. Per-run paired sd on
+  floors is 4.4 (rest arms) to 7.9 (elite arms), so n = 120 buys a standard error
+  of 0.4–0.7 floors. **Compute the n needed for t = 3 at the effect you are
+  chasing before running the arm** — for these it was 490–880, and rounds 1 and 2
+  were never going to settle it. Agreement between two underpowered rounds is
+  not evidence; it is two draws from the same wide distribution.
 
 ---
 
