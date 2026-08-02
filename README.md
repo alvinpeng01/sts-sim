@@ -216,6 +216,7 @@ in-tree.
 | Progressive widening explains that flat honest response | **Refuted on val.** Looked like +4.27 ± 1.21 (t = 3.52) on a disjoint *train* slice; on val neither the grid best nor the hand-picked setting beats shipped (−0.69 ± 1.01 and −1.60 ± 0.93). Confirming on train is not confirming |
 | Survival-weighted route planning (elite weight 3.0) | **−3.68 ± 1.10** floors, elite capture 3.3% → 89.2% |
 | A canonical (unordered) draw pile beats a per-sample ordered one | **+0.48 ± 0.58** (t = 0.84) on 150 train fights at k = 3 — inside the noise floor. See below |
+| Paired determinizations across root candidates | **Refuted at every budget.** −0.60 ± 0.40 at 100 sims; at 900 sims two underpowered rounds agreed (+1.46 ± 0.67, +1.26 ± 0.74, combined t = 2.77) and the pre-registered n = 585 decisive round measured **+0.00 ± 0.35 (t = 0.00)** |
 | Inference-time routing biases (ELITE, REST, hp-conditioned REST) | **Refuted on three disjoint seed sets.** Best arm decayed +0.50 → +0.41 → **−0.08 ± 0.16** as n went 120 → 350 → 800; combined +0.10 ± 0.13. The bias fired (rests/run 3.79 → 4.15) and bought nothing |
 | Skipping card rewards more often (deck thinning) | **−3.08 ± 0.51** at skip+4; +0.5 and +1 change zero runs. Loss is monotone in skip volume |
 | …and skipping *selectively*, only weak offers | **Refuted.** At matched volume (14.3% vs 14.6% declined) targeting by human pick rate scores **+0.04 ± 0.24** against untargeted — nothing. For this agent more cards is more floors across the whole tested range |
@@ -256,7 +257,10 @@ The short list:
   of 0.4–0.7 floors. **Compute the n needed for t = 3 at the effect you are
   chasing before running the arm** — for these it was 490–880, and rounds 1 and 2
   were never going to settle it. Agreement between two underpowered rounds is
-  not evidence; it is two draws from the same wide distribution.
+  not evidence; it is two draws from the same wide distribution. **It recurred
+  the very next day**: paired determinizations read +1.46 ± 0.67 then
+  +1.26 ± 0.74 on disjoint sets (combined t = 2.77) and the powered n = 585
+  round measured +0.00 ± 0.35.
 
 ---
 
@@ -297,9 +301,14 @@ index the draw pile by position, and the honest-mode permutation ran between
 enumeration and execution, re-pointing the index. Fixed and pinned by
 `tests/test_honest_draw_pile.py`.
 
-**`paired_determinization` implemented** (default off): keys the honest-regime
+**`paired_determinization` implemented, and refuted.** Keys the honest-regime
 permutation by root-candidate visit index so sequential halving compares
-candidates across the same sampled futures. Verdict pending.
+candidates across the same sampled futures. Loses −0.60 ± 0.40 at 100 sims. At
+900 sims it appeared to work twice — +1.46 ± 0.67 on train, +1.26 ± 0.74 on val,
+combined t = 2.77 — and the properly powered decisive round (585 disjoint
+fights, pre-registered t ≥ 3) measured **+0.00 ± 0.35**. The parameter stays in
+the engine, default 0.0. This is the second consecutive occurrence of the
+two-underpowered-rounds-agreeing trap, one day after it was written down.
 
 ### 2026-08-01
 
