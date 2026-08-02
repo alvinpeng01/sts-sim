@@ -217,6 +217,8 @@ in-tree.
 | Survival-weighted route planning (elite weight 3.0) | **−3.68 ± 1.10** floors, elite capture 3.3% → 89.2% |
 | A canonical (unordered) draw pile beats a per-sample ordered one | **+0.48 ± 0.58** (t = 0.84) on 150 train fights at k = 3 — inside the noise floor. See below |
 | Inference-time routing biases (ELITE, REST, hp-conditioned REST) | **Refuted on three disjoint seed sets.** Best arm decayed +0.50 → +0.41 → **−0.08 ± 0.16** as n went 120 → 350 → 800; combined +0.10 ± 0.13. The bias fired (rests/run 3.79 → 4.15) and bought nothing |
+| Skipping card rewards more often (deck thinning) | **−3.08 ± 0.51** at skip+4; +0.5 and +1 change zero runs. Loss is monotone in skip volume |
+| …and skipping *selectively*, only weak offers | **Refuted.** At matched volume (14.3% vs 14.6% declined) targeting by human pick rate scores **+0.04 ± 0.24** against untargeted — nothing. For this agent more cards is more floors across the whole tested range |
 
 ### Measurement traps this project has actually fallen into
 
