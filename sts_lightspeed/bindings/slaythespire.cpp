@@ -466,6 +466,18 @@ namespace {
         // Rampage, Genetic Algorithm -- all in specialData) never merge unless
         // that state is identical too. 0 = off.
         double mergeDuplicateActions = 0.0;
+        // Two-stage escalation: rerun the root search at escalationSims when
+        // the decision is BOTH dangerous and contested. Uniform danger-gating
+        // measured +2.78/+0.87 (train killers / full val) but escalated 31-48%
+        // of decisions for 3-4x wall clock, because A20 danger is common; the
+        // metareasoning literature and the duplicate-merge refutation both say
+        // the budget belongs on contested decisions specifically. Danger:
+        // unblocked >= escalationDangerFrac * hp, or the Heart is present
+        // (Beat of Death is invisible to move telegraphs). Contested: top-2
+        // survivor mean values within escalationQgap. 0 = off.
+        double escalationSims = 0.0;
+        double escalationQgap = 0.25;
+        double escalationDangerFrac = 0.25;
 
         // PUCT-style prior bonus in nativeSelectIdx, on top of (not replacing) the existing
         // UCB1 exploration term -- see nativeSelectIdx's own comment for the formula. cPuct=0.0
@@ -2712,6 +2724,11 @@ namespace {
     // attributable to one root candidate (plain MCTS path), pairing inert.
     std::uint64_t g_pairSeedBase = 0;
     int g_pairIndex = -1;
+    // Diagnostics for choosing escalationQgap: the top-2 survivor value gap and
+    // the escalation verdicts of the most recent root search.
+    double g_lastRootValueGap = -1.0;
+    bool g_lastSearchDangerous = false;
+    bool g_lastSearchEscalated = false;
 
     bool nativePairingActive() {
         return g_params.pairedDeterminization != 0.0 && g_pairIndex >= 0
@@ -3176,6 +3193,57 @@ namespace {
             }
         }
         g_pairIndex = -1;
+        // Top-2 survivor gap, recorded every search (diagnostic), acted on when
+        // escalation is enabled and this call is still the base-budget stage.
+        {
+            // Over every VISITED root action, not `survivors` -- the halving
+            // loop has already resized survivors down to one by this point, so
+            // the runner-up lives in the eliminated set. The gap between the
+            // last survivor and the best eliminated candidate is exactly how
+            // contested the final cut was.
+            double q1 = -std::numeric_limits<double>::infinity();
+            double q2 = -std::numeric_limits<double>::infinity();
+            int visited = 0;
+            for (std::size_t idx = 0; idx < root->actions.size(); ++idx) {
+                if (root->N[idx] <= 0) {
+                    continue;
+                }
+                ++visited;
+                const double q = root->W[idx] / root->N[idx];
+                if (q > q1) { q2 = q1; q1 = q; }
+                else if (q > q2) { q2 = q; }
+            }
+            g_lastRootValueGap = visited >= 2 ? q1 - q2 : -1.0;
+        }
+        if (g_params.escalationSims > 0.0
+            && nSimulations < static_cast<int>(g_params.escalationSims)) {
+            const HeuristicContext ctx = nativeComputeHeuristicContext(bc);
+            bool heartPresent = false;
+            for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+                if (bc.monsters.arr[i].id == MonsterId::CORRUPT_HEART
+                    && bc.monsters.arr[i].curHp > 0) {
+                    heartPresent = true;
+                }
+            }
+            const bool dangerous = heartPresent
+                || ctx.unblocked >= g_params.escalationDangerFrac
+                    * std::max(1, static_cast<int>(bc.player.curHp));
+            const bool contested = g_lastRootValueGap >= 0.0
+                && g_lastRootValueGap < g_params.escalationQgap;
+            g_lastSearchDangerous = dangerous;
+            g_lastSearchEscalated = dangerous && contested;
+            if (g_lastSearchEscalated) {
+                // Fresh full search at the big budget -- exactly the shape the
+                // savable-death probe validated. The recursive call fails this
+                // nSimulations guard, so it cannot escalate again.
+                return nativeRunMctsSearchSeqHalving(
+                    bc, static_cast<int>(g_params.escalationSims),
+                    useCrn, crnBase, useSearchSeed, searchSeed);
+            }
+        } else {
+            g_lastSearchDangerous = false;
+            g_lastSearchEscalated = false;
+        }
         int bestIdx = survivors[0];
         double bestQ = -std::numeric_limits<double>::infinity();
         for (int idx : survivors) {
@@ -4785,6 +4853,11 @@ PYBIND11_MODULE(slaythespire, m) {
         })
         .def("get_legal_actions", &sts::py::getLegalActions)
         .def("get_monster_move_damage", &sts::py::getMonsterMoveDamage)
+        .def_static("last_search_diag", []() {
+            return pybind11::make_tuple(g_lastRootValueGap,
+                                        g_lastSearchDangerous,
+                                        g_lastSearchEscalated);
+        })
         .def("get_player_status_value", &sts::py::getPlayerStatusValue)
         .def("get_monster_status_value", &sts::py::getMonsterStatusValue)
         .def("get_monster_misc_info", &sts::py::getMonsterMiscInfo)
@@ -5243,6 +5316,9 @@ PYBIND11_MODULE(slaythespire, m) {
         d["boss_card_play_prior_weight"] = g_params.bossCardPlayPriorWeight;
         d["paired_determinization"] = g_params.pairedDeterminization;
         d["merge_duplicate_actions"] = g_params.mergeDuplicateActions;
+        d["escalation_sims"] = g_params.escalationSims;
+        d["escalation_qgap"] = g_params.escalationQgap;
+        d["escalation_danger_frac"] = g_params.escalationDangerFrac;
         d["c_puct"] = g_params.cPuct;
         d["puct_temperature"] = g_params.puctTemperature;
         d["policy_net_weight"] = g_params.policyNetWeight;
@@ -5343,6 +5419,9 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("boss_card_play_prior_weight", g_params.bossCardPlayPriorWeight);
         setIf("paired_determinization", g_params.pairedDeterminization);
         setIf("merge_duplicate_actions", g_params.mergeDuplicateActions);
+        setIf("escalation_sims", g_params.escalationSims);
+        setIf("escalation_qgap", g_params.escalationQgap);
+        setIf("escalation_danger_frac", g_params.escalationDangerFrac);
         setIf("c_puct", g_params.cPuct);
         setIf("puct_temperature", g_params.puctTemperature);
         setIf("policy_net_weight", g_params.policyNetWeight);
