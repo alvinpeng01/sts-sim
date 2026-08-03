@@ -303,6 +303,14 @@ index the draw pile by position, and the honest-mode permutation ran between
 enumeration and execution, re-pointing the index. Fixed and pinned by
 `tests/test_honest_draw_pile.py`.
 
+**Sealed test shot (honest, k=3): flat −10.41 → vote −8.09** (+2.32 ± 0.37,
+t = 6.28; deaths 312 → 265). Against silverbot's −6.58 on the same fights, the
+honest gap has gone **4.60 → 1.51 HP** — two-thirds closed, at 5× per-decision
+cost the live bridge can pay. Compute-neutral voting is refuted: at fixed 100
+sims, 2×50/3×33/5×20 all lose 3-4 HP to 1×100 (t ≤ −3.6) — members below full
+strength are too weak, so the vote's value comes from *adding* independent
+members, never from splitting.
+
 **Ensemble root voting breaks the honest wall.** K independent searches per
 decision, majority vote over action identity. Honest regime: train killers
 **+5.91 ± 0.79 (t = 7.50)** over 1×100 and **+4.64 ± 0.83 (t = 5.59)** over
