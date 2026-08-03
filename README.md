@@ -301,6 +301,24 @@ index the draw pile by position, and the honest-mode permutation ran between
 enumeration and execution, re-pointing the index. Fixed and pinned by
 `tests/test_honest_draw_pile.py`.
 
+**Danger-gated search budget — the first replicated search-side win, and it is
+clairvoyant-only.** Death forensics found 18% of killer deaths end a turn
+holding block that covers the lethal gap; replaying those turns, the same state
+blocks 4% of the time at 100 sims and 40% at 900 (and zeroing
+`loss_progress_credit` *halves* it — that weight is load-bearing). Escalating
+to 900 sims when telegraphed unblocked ≥ 25% of HP (always, vs the Heart —
+Beat of Death is invisible to telegraph math): train killers **+2.78 ± 0.79
+(t = 3.54)**, full val **+0.87 ± 0.28 (t = 3.12)** with both subsets
+independently positive, at 3.14× wall clock (31% of A20 decisions are
+dangerous). The honest regime does not inherit it: +0.73 ± 0.75 (t = 0.97).
+With global budget, pairing, and targeted escalation all null under honest
+draws, the honest wall is rollout *bias* under hidden information — compute
+addresses the evaluation half of the deficit, not the information half.
+Deployment is a wrapper-level sims policy; instability gating is the
+identified cost reducer. Also verified: sequential halving wastes root budget
+on duplicate candidates (3 identical twins in a 5-card starter hand) —
+merging them is free effective budget exactly where starvation was measured.
+
 **`paired_determinization` implemented, and refuted.** Keys the honest-regime
 permutation by root-candidate visit index so sequential halving compares
 candidates across the same sampled futures. Loses −0.60 ± 0.40 at 100 sims. At
