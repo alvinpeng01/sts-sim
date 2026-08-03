@@ -304,12 +304,23 @@ enumeration and execution, re-pointing the index. Fixed and pinned by
 `tests/test_honest_draw_pile.py`.
 
 **Sealed test shot (honest, k=3): flat −10.41 → vote −8.09** (+2.32 ± 0.37,
-t = 6.28; deaths 312 → 265). Against silverbot's −6.58 on the same fights, the
-honest gap has gone **4.60 → 1.51 HP** — two-thirds closed, at 5× per-decision
-cost the live bridge can pay. Compute-neutral voting is refuted: at fixed 100
-sims, 2×50/3×33/5×20 all lose 3-4 HP to 1×100 (t ≤ −3.6) — members below full
-strength are too weak, so the vote's value comes from *adding* independent
-members, never from splitting.
+t = 6.28; deaths 312 → 265). Compute-neutral voting is refuted: at fixed 100
+sims, 2×50/3×33/5×20 all lose 3-4 HP to 1×100 (t ≤ −3.6) — the vote's value
+comes from *adding* independent members, never from splitting.
+
+**The matched silverbot bracket, which corrects an earlier claim.** The
+recorded −6.58 was k = 1 on their 528 playable fights; re-measured at k = 3 it
+is **−7.48** (single-seed noise had flattered them ~0.9 HP), and at base-500 it
+is **−3.93** — their search *scales with budget* (+3.55 per 5×) where our
+single tree is flat. On the identical 528 fights: ours flat100 −9.82, ours
+vote-5×100 −7.52. So at matched total compute they lead **~2.3 HP at 100 and
+~3.6 at 500**, and their own default is base-1000. An interim claim that voting
+had closed two-thirds of the gap compared our 500-sim spend against their k=1
+base-100 number and is retracted. What the bracket does establish: their
+in-tree belief averaging is the budget-scaling mechanism our voting only
+approximates externally — and every combat null this project measured at 100
+sims (canonical pile included) was measured in the regime where *nothing*
+scales, so the high-budget regime reopens questions the 100-sim regime closed.
 
 **Ensemble root voting breaks the honest wall.** K independent searches per
 decision, majority vote over action identity. Honest regime: train killers
