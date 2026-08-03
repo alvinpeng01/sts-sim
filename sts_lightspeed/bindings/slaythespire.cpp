@@ -502,6 +502,23 @@ namespace {
         // Values are silverbot's own widening constants. -1 = inherit wc/wa.
         double honestWcChance = 4.6;
         double honestWaChance = 0.37;
+        // Attacks into an INTANGIBLE monster deal 1 per hit; the rollout's
+        // attack terms score them at full value, so every simulated future
+        // happily burns damage into intangible turns and the tree cannot see
+        // the waste. Measured before this term existed: 6.1 attacks landed
+        // into intangible per Nemesis fight at 500 sims, and Nemesis carried
+        // -11.4/fight of the matched-500 silverbot residual. Flat score
+        // penalty on ATTACK cards whose chosen target is currently
+        // intangible; block/setup/AoE-elsewhere lines win those turns
+        // instead. 0 = off.
+        double intangibleAttackPenalty = 0.0;
+        // Companion to intangibleAttackPenalty: ARTIFACT charges eat the next
+        // debuff, but the vulnerable/weak apply bonuses reward the play at
+        // full value -- so rollouts happily Bash into a 3-charge Sentry.
+        // 1 = the apply bonuses treat an artifact-holding target as
+        // already-debuffed (bonus zero; the attack's damage terms still score,
+        // only the phantom debuff credit disappears). 0 = off.
+        double artifactAwareDebuffs = 0.0;
 
         // PUCT-style prior bonus in nativeSelectIdx, on top of (not replacing) the existing
         // UCB1 exploration term -- see nativeSelectIdx's own comment for the formula. cPuct=0.0
@@ -1288,10 +1305,18 @@ namespace {
                 return 0.0;
             }
             const Monster &m = sim.monsters.arr[t];
+            if (g_params.artifactAwareDebuffs != 0.0
+                && m.getStatus<MS::ARTIFACT>() > 0) {
+                return 0.0;
+            }
             return (m.curHp > 0 && m.getStatus<MS::VULNERABLE>() <= 0) ? g_params.vulnerableApplyBonus : 0.0;
         }
         for (int i = 0; i < sim.monsters.monsterCount; ++i) {
             const Monster &m = sim.monsters.arr[i];
+            if (g_params.artifactAwareDebuffs != 0.0
+                && m.getStatus<MS::ARTIFACT>() > 0) {
+                continue;
+            }
             if (m.curHp > 0 && m.getStatus<MS::VULNERABLE>() <= 0) {
                 return g_params.vulnerableApplyBonus;
             }
@@ -1317,10 +1342,18 @@ namespace {
                 return 0.0;
             }
             const Monster &m = sim.monsters.arr[t];
+            if (g_params.artifactAwareDebuffs != 0.0
+                && m.getStatus<MS::ARTIFACT>() > 0) {
+                return 0.0;
+            }
             return (m.curHp > 0 && m.getStatus<MS::WEAK>() <= 0) ? g_params.weakApplyBonus : 0.0;
         }
         for (int i = 0; i < sim.monsters.monsterCount; ++i) {
             const Monster &m = sim.monsters.arr[i];
+            if (g_params.artifactAwareDebuffs != 0.0
+                && m.getStatus<MS::ARTIFACT>() > 0) {
+                continue;
+            }
             if (m.curHp > 0 && m.getStatus<MS::WEAK>() <= 0) {
                 return g_params.weakApplyBonus;
             }
@@ -1495,6 +1528,10 @@ namespace {
                     if (g_params.attackDamageScoreWeight != 0.0 && baseDamage > 0) {
                         s += g_params.attackDamageScoreWeight
                             * sim.calculateCardDamage(card, targetIdx, baseDamage);
+                    }
+                    if (g_params.intangibleAttackPenalty != 0.0
+                        && target.getStatus<MS::INTANGIBLE>() > 0) {
+                        s -= g_params.intangibleAttackPenalty;
                     }
                 }
                 if (ctx.livingMonsters >= 2 && isAoeCard(card.id)) {
@@ -5380,6 +5417,8 @@ PYBIND11_MODULE(slaythespire, m) {
         d["escalation_qgap"] = g_params.escalationQgap;
         d["escalation_danger_frac"] = g_params.escalationDangerFrac;
         d["merge_chance_outcomes"] = g_params.mergeChanceOutcomes;
+        d["intangible_attack_penalty"] = g_params.intangibleAttackPenalty;
+        d["artifact_aware_debuffs"] = g_params.artifactAwareDebuffs;
         d["honest_wc_chance"] = g_params.honestWcChance;
         d["honest_wa_chance"] = g_params.honestWaChance;
         d["c_puct"] = g_params.cPuct;
@@ -5486,6 +5525,8 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("escalation_qgap", g_params.escalationQgap);
         setIf("escalation_danger_frac", g_params.escalationDangerFrac);
         setIf("merge_chance_outcomes", g_params.mergeChanceOutcomes);
+        setIf("intangible_attack_penalty", g_params.intangibleAttackPenalty);
+        setIf("artifact_aware_debuffs", g_params.artifactAwareDebuffs);
         setIf("honest_wc_chance", g_params.honestWcChance);
         setIf("honest_wa_chance", g_params.honestWaChance);
         setIf("c_puct", g_params.cPuct);

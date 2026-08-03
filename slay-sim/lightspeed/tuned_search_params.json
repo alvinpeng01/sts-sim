@@ -11,6 +11,7 @@
     "params": {
         "alive_monster_penalty_weight": 0.40866714405655247,
         "aoe_bonus": 18.032280844652682,
+        "artifact_aware_debuffs": 1.0,
         "attack_base": 7.696720139056503,
         "attack_block_penalty_scale": 0.17781321169581524,
         "attack_damage_score_weight": 0.02581749048140904,
@@ -29,6 +30,7 @@
         "end_turn_time_warp_risk_score": 15.720662866861767,
         "enemy_block_weight": 1.0737260644275524,
         "energy_waste_weight": 4.882104163530477,
+        "intangible_attack_penalty": 25.0,
         "loss_progress_credit_weight": 713.6988102146123,
         "per_card_weight_scale": 23.1386912177827,
         "potion_score_weight": 15.964807521598733,
