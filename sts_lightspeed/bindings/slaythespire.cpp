@@ -456,6 +456,16 @@ namespace {
         // multiset matches, and the comparison differences out the shared
         // noise, the same trick _param_ab plays between configs. 0 = off.
         double pairedDeterminization = 0.0;
+        // Merge root/tree candidates that are provably the same move. Two
+        // copies of Strike in hand are two ACTIONS but one DECISION; sequential
+        // halving splits its per-candidate budget between them, which is how a
+        // 5-card starter hand wastes a third of its root budget and how the
+        // savable-death hands (three Angers, two Strikes) starve the block
+        // candidate that mattered. The merge key is every CardInstance field
+        // except uniqueId, so cards with per-instance state (Ritual Dagger,
+        // Rampage, Genetic Algorithm -- all in specialData) never merge unless
+        // that state is identical too. 0 = off.
+        double mergeDuplicateActions = 0.0;
 
         // PUCT-style prior bonus in nativeSelectIdx, on top of (not replacing) the existing
         // UCB1 exploration term -- see nativeSelectIdx's own comment for the formula. cPuct=0.0
@@ -2630,8 +2640,53 @@ namespace {
         return bestIdx;
     }
 
+    void nativeDedupActions(const BattleContext &bc, std::vector<search::Action> &actions) {
+        if (g_params.mergeDuplicateActions == 0.0 || actions.size() < 2) {
+            return;
+        }
+        // Packed identity key. CARD: every CardInstance field except uniqueId,
+        // plus the target -- twins identical in all of those reach identical
+        // successor states up to uniqueId bookkeeping. POTION: potion id and
+        // target. Card-select/scry actions are positional into piles and are
+        // deliberately left alone.
+        std::vector<std::uint64_t> seen;
+        seen.reserve(actions.size());
+        std::vector<search::Action> kept;
+        kept.reserve(actions.size());
+        for (const auto &action : actions) {
+            std::uint64_t key;
+            const auto type = action.getActionType();
+            if (type == search::ActionType::CARD) {
+                const CardInstance &c = bc.cards.hand[action.getSourceIdx()];
+                key = (static_cast<std::uint64_t>(1) << 60)
+                    ^ (static_cast<std::uint64_t>(static_cast<std::uint16_t>(c.id)) << 44)
+                    ^ (static_cast<std::uint64_t>(static_cast<std::uint16_t>(c.specialData)) << 28)
+                    ^ (static_cast<std::uint64_t>(static_cast<std::uint8_t>(c.cost)) << 20)
+                    ^ (static_cast<std::uint64_t>(static_cast<std::uint8_t>(c.costForTurn)) << 12)
+                    ^ (static_cast<std::uint64_t>(c.upgraded) << 11)
+                    ^ (static_cast<std::uint64_t>(c.freeToPlayOnce) << 10)
+                    ^ (static_cast<std::uint64_t>(c.retain) << 9)
+                    ^ static_cast<std::uint64_t>(action.getTargetIdx() & 0xF);
+            } else if (type == search::ActionType::POTION) {
+                key = (static_cast<std::uint64_t>(2) << 60)
+                    ^ (static_cast<std::uint64_t>(static_cast<std::uint16_t>(
+                           bc.potions[action.getSourceIdx()])) << 8)
+                    ^ static_cast<std::uint64_t>(action.getTargetIdx() & 0xF);
+            } else {
+                kept.push_back(action);
+                continue;
+            }
+            if (std::find(seen.begin(), seen.end(), key) == seen.end()) {
+                seen.push_back(key);
+                kept.push_back(action);
+            }
+        }
+        actions = std::move(kept);
+    }
+
     double nativeExpandLeaf(MctsNode *node, int maxTurn, std::vector<std::uint32_t> *raveTrace = nullptr) {
         node->actions = sts::py::getLegalActions(node->bc);
+        nativeDedupActions(node->bc, node->actions);
         node->N.assign(node->actions.size(), 0);
         node->W.assign(node->actions.size(), 0.0);
         node->children.assign(node->actions.size(), nullptr);
@@ -2970,6 +3025,7 @@ namespace {
         // Initialize the root so its action list exists before allocation decisions are made.
         // Calling nativeExpandLeaf here would run and discard one full rollout.
         root->actions = sts::py::getLegalActions(root->bc);
+        nativeDedupActions(root->bc, root->actions);
         root->N.assign(root->actions.size(), 0);
         root->W.assign(root->actions.size(), 0.0);
         root->children.assign(root->actions.size(), nullptr);
@@ -5186,6 +5242,7 @@ PYBIND11_MODULE(slaythespire, m) {
         d["card_play_prior_weight"] = g_params.cardPlayPriorWeight;
         d["boss_card_play_prior_weight"] = g_params.bossCardPlayPriorWeight;
         d["paired_determinization"] = g_params.pairedDeterminization;
+        d["merge_duplicate_actions"] = g_params.mergeDuplicateActions;
         d["c_puct"] = g_params.cPuct;
         d["puct_temperature"] = g_params.puctTemperature;
         d["policy_net_weight"] = g_params.policyNetWeight;
@@ -5285,6 +5342,7 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("card_play_prior_weight", g_params.cardPlayPriorWeight);
         setIf("boss_card_play_prior_weight", g_params.bossCardPlayPriorWeight);
         setIf("paired_determinization", g_params.pairedDeterminization);
+        setIf("merge_duplicate_actions", g_params.mergeDuplicateActions);
         setIf("c_puct", g_params.cPuct);
         setIf("puct_temperature", g_params.puctTemperature);
         setIf("policy_net_weight", g_params.policyNetWeight);
