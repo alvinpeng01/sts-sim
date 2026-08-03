@@ -303,6 +303,19 @@ index the draw pile by position, and the honest-mode permutation ran between
 enumeration and execution, re-pointing the index. Fixed and pinned by
 `tests/test_honest_draw_pile.py`.
 
+**Ensemble root voting breaks the honest wall.** K independent searches per
+decision, majority vote over action identity. Honest regime: train killers
+**+5.91 ± 0.79 (t = 7.50)** over 1×100 and **+4.64 ± 0.83 (t = 5.59)** over
+1×500 — *the same total compute* — while 1×500 vs 1×100 re-confirms the flat
+budget wall in the same run. Val, full split: **+2.91 ± 0.35 (t = 8.27)**,
+killers +5.78 replicating train, ordinary fights +2.35, honest val mean
+−8.84 → **−5.93**. Mechanism: within one tree, Q estimates inherit early
+sampled draw orders and are correlated — one unlucky determinization poisons a
+branch; independent trees make independent errors and the vote suppresses them.
+This is why budget (re-samples the same correlated structure) and pairing
+(added correlation) both failed. Deploys as a pure wrapper policy — the live
+bridge plays honest and latency-tolerant, so it drops in with no engine change.
+
 **Danger-gated search budget — the first replicated search-side win, and it is
 clairvoyant-only.** Death forensics found 18% of killer deaths end a turn
 holding block that covers the lethal gap; replaying those turns, the same state
