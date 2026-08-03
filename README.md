@@ -508,6 +508,17 @@ Roughly in order of expected value.
    in `nativeSeedRng`); Stance Potion deadlocks the battle (Watcher-only).
 5. **Differential testing.** Constants are verified against the game; *behaviour*
    is not — modifier ordering, monster move-selection AI, helper-action values.
+6. **The belief-MDP port (the largest remaining combat project).** Silverbot's
+   budget slope is now explained by direct reading (`docs/13`): their states are
+   *information sets* — pile as unknown multiset + known stacks, full-equality
+   graph dedup merging equivalent chance outcomes, no ordered pile anywhere, so
+   no honest/clairvoyant distinction exists and budget sharpens one posterior
+   instead of multiplying determinizations. Level 1 port (order-blind
+   chance-outcome merging with equality resolution) is a moderate engine change
+   with a standing test; Level 2 (multiset pile in the state itself) is the
+   full answer. The 08-03 lazy-shuffle null does not price either — it
+   randomized inside order-carrying subtrees rather than removing the order
+   from the state.
 
 Not worth doing, with reasons in the docs: tree reuse (1.34× ceiling), state
 merging, fixing Runic Dome clairvoyance (3% of runs, makes them harder).
