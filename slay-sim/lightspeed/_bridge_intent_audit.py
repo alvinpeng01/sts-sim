@@ -32,6 +32,7 @@ import sys
 import slaythespire as sts
 
 from sts.bridge.native_recommend import UnmappedMonsterError, _map_monster_id
+from sts.bridge.intent_map import lookup_move_name
 
 
 CAPTURE = "sts_raw_states.log"
@@ -84,6 +85,12 @@ def main() -> None:
             spec.max_hp = monster.get("max_hp", 1)
             spec.block = monster.get("block", 0)
             spec.statuses = []
+            # Same lookup the live bridge now applies. With the mapping in
+            # place this file is the regression test its docstring promised:
+            # the pre-mapping baseline was 12.5%.
+            mapped = lookup_move_name(name, monster.get("move_id"))
+            if mapped is not None:
+                spec.move_name = mapped
             player = combat.get("player", {})
             try:
                 bc = sts.build_battle_context(

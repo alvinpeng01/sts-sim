@@ -45,6 +45,8 @@ import slaythespire as sts  # noqa: E402
 
 import json as _json  # noqa: E402
 
+from sts.bridge.intent_map import lookup_move_name  # noqa: E402
+
 _TUNED_PARAMS_PATH = _STS_PROJECT_ROOT / "slay-sim" / "lightspeed" / "tuned_search_params.json"
 _params_loaded = False
 
@@ -356,11 +358,15 @@ def native_recommend(combat_state_json: dict, game_state: Optional[dict] = None,
             if name is not None:
                 statuses.append((name, p.get("amount", 1)))
         spec.statuses = statuses
-        # Monster move NAME mapping is intentionally not attempted here (spirecomm/
-        # CommunicationMod's move_id is a per-monster-class-local numeric id with no
-        # name attached anywhere in the protocol) -- build_battle_context's own
-        # fallback (rolls a plausible move via this engine's own AI model) handles
-        # this the same way native_search_agent.py's bridge does.
+        # The telegraphed move, where the derived (monster, move_id) table knows
+        # it. Before this lookup the engine rolled its own guess -- measured
+        # 12.5% correct (lightspeed/_bridge_intent_audit.py), with worst cases
+        # predicting ZERO incoming damage and thereby firing the defensive-card
+        # suppression against every Defend in hand. Unmapped pairs keep the old
+        # AI-roll fallback, so this path can only improve on the guess.
+        move_name = lookup_move_name(spec.monster_id_name, live.get("move_id"))
+        if move_name is not None:
+            spec.move_name = move_name
         monster_specs.append(spec)
 
     def _cards(entries):

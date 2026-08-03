@@ -496,11 +496,14 @@ Roughly in order of expected value.
    to every fight, so an elite carries the same modelled risk as an ordinary
    monster while being worth more, and it takes 89% of them. Give ELITE nodes a
    harsher survival factor, and sweep the elite weight down.
-3. **Live-bridge monster intents.** The bridge discards the telegraphed intent and
-   rolls its own guess, **wrong 87.5% of the time**, with failure modes that zero
-   `dangerFraction` and suppress every Defend in hand. The mapping is 21
-   `(monster, move_id)` pairs. Mechanical, and the largest real-world combat gain
-   on the books.
+3. ~~Live-bridge monster intents~~ **Fixed 2026-08-03.** The bridge now maps the
+   telegraphed `(monster, move_id)` to the engine move via a table *derived from
+   the live capture* (each pair identified by forcing candidates and matching
+   the telegraphed damage — 15/17 unique, 2 hand-resolved). Audit match rate
+   12.5% → **69.2%**, and the residual is mostly the audit's own bare
+   reconstruction (it omits the statuses the live bridge passes); the one real
+   remainder is Book of Stabbing's hit counter, which the protocol cannot
+   convey. `sts/bridge/intent_map.py`; the audit is its regression test.
 4. **Live-path robustness.** Entropic Brew hangs the bridge (`potionRng` unseeded
    in `nativeSeedRng`); Stance Potion deadlocks the battle (Watcher-only).
 5. **Differential testing.** Constants are verified against the game; *behaviour*
