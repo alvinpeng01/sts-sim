@@ -519,6 +519,17 @@ namespace {
         // already-debuffed (bonus zero; the attack's damage terms still score,
         // only the phantom debuff credit disappears). 0 = off.
         double artifactAwareDebuffs = 0.0;
+        // Battle-long tree reuse (silverbot's rerootAt, docs/13 piece 5). The
+        // arena persists across a battle's decisions; the next search matches
+        // the REAL post-action state against the previously chosen action's
+        // stored children (info-set key under honest draws, exact key
+        // otherwise) and re-roots on the matching subtree, keeping every
+        // statistic its simulations earned. A miss -- including every battle
+        // boundary -- clears the arena and starts cold, so correctness never
+        // depends on the match firing. The old 1.34x reuse ceiling was
+        // measured on cap-1 fragmented trees; widened honest trees are worth
+        // keeping. 0 = off.
+        double treeReuse = 0.0;
 
         // PUCT-style prior bonus in nativeSelectIdx, on top of (not replacing) the existing
         // UCB1 exploration term -- see nativeSelectIdx's own comment for the formula. cPuct=0.0
@@ -3113,6 +3124,78 @@ namespace {
     // Final pick is by mean value among survivors rather than by visit count: visit counts here
     // are an artifact of the phase schedule (every survivor is deliberately given equal pulls
     // within a phase), so they carry no preference information the way UCB1 visit counts do.
+    // Tree-reuse state. Single-threaded search: the arena outlives calls only
+    // so the previous root's subtrees stay valid; everything is discarded the
+    // moment a match fails.
+    std::unique_ptr<MctsArena> g_reuseArena;
+    MctsNode *g_reusePrevRoot = nullptr;
+    int g_reusePrevChosen = -1;
+    std::int64_t g_reuseHits = 0, g_reuseMisses = 0;
+
+    void nativeResetSearchTree() {
+        g_reuseArena.reset();
+        g_reusePrevRoot = nullptr;
+        g_reusePrevChosen = -1;
+    }
+
+    // Identity signature for grafting root actions across two orderings of
+    // the same information set -- same encoding as nativeDedupActions.
+    std::uint64_t nativeActionIdentity(const BattleContext &bc,
+                                       const search::Action &action) {
+        const auto type = action.getActionType();
+        if (type == search::ActionType::CARD) {
+            const CardInstance &c = bc.cards.hand[action.getSourceIdx()];
+            return (static_cast<std::uint64_t>(1) << 60)
+                ^ (static_cast<std::uint64_t>(static_cast<std::uint16_t>(c.id)) << 44)
+                ^ (static_cast<std::uint64_t>(static_cast<std::uint16_t>(c.specialData)) << 28)
+                ^ (static_cast<std::uint64_t>(static_cast<std::uint8_t>(c.cost)) << 20)
+                ^ (static_cast<std::uint64_t>(static_cast<std::uint8_t>(c.costForTurn)) << 12)
+                ^ (static_cast<std::uint64_t>(c.upgraded) << 11)
+                ^ (static_cast<std::uint64_t>(c.freeToPlayOnce) << 10)
+                ^ (static_cast<std::uint64_t>(c.retain) << 9)
+                ^ static_cast<std::uint64_t>(action.getTargetIdx() & 0xF);
+        }
+        if (type == search::ActionType::POTION) {
+            return (static_cast<std::uint64_t>(2) << 60)
+                ^ (static_cast<std::uint64_t>(static_cast<std::uint16_t>(
+                       bc.potions[action.getSourceIdx()])) << 8)
+                ^ static_cast<std::uint64_t>(action.getTargetIdx() & 0xF);
+        }
+        if (type == search::ActionType::END_TURN) {
+            return (static_cast<std::uint64_t>(3) << 60);
+        }
+        return 0;  // card-select / scry: positional, never grafted
+    }
+
+    MctsNode *nativeFindReuseRoot(const BattleContext &bc) {
+        if (g_reusePrevRoot == nullptr || g_reusePrevChosen < 0
+            || g_reusePrevChosen >= static_cast<int>(g_reusePrevRoot->actions.size())) {
+            return nullptr;
+        }
+        // The played action's resulting real state, against the stored
+        // deterministic child and every chance sample. Key comparison uses the
+        // info-set key under honest draws -- the real pile order is exactly
+        // the thing the honest tree never conditioned on.
+        const NativeStateKey want = nativeHonestDrawOrder()
+            ? nativeInfoSetKey(bc) : nativeStateKey(bc);
+        MctsNode *det = g_reusePrevRoot->children[g_reusePrevChosen];
+        if (det != nullptr) {
+            const NativeStateKey got = nativeHonestDrawOrder()
+                ? nativeInfoSetKey(det->bc) : nativeStateKey(det->bc);
+            if (got == want) {
+                return det;
+            }
+        }
+        for (MctsNode *cand : g_reusePrevRoot->chanceChildren[g_reusePrevChosen]) {
+            const NativeStateKey got = nativeHonestDrawOrder()
+                ? nativeInfoSetKey(cand->bc) : nativeStateKey(cand->bc);
+            if (got == want) {
+                return cand;
+            }
+        }
+        return nullptr;
+    }
+
     std::pair<search::Action, std::vector<std::int64_t>> nativeRunMctsSearchSeqHalving(
             const BattleContext &bc, int nSimulations, bool useCrn, std::uint64_t crnBase,
             bool useSearchSeed, std::uint64_t searchSeed) {
@@ -3120,7 +3203,27 @@ namespace {
         // its RNG has to be tied to this call's seed or the search is not reproducible
         // and sibling candidates lose common random numbers.
         nativeSeedGumbel(useSearchSeed ? searchSeed : std::random_device{}());
-        MctsArena arena;
+        const bool reuse = g_params.treeReuse != 0.0;
+        MctsArena localArena;
+        MctsNode *reused = nullptr;
+        if (reuse) {
+            reused = nativeFindReuseRoot(bc);
+            if (reused != nullptr) {
+                ++g_reuseHits;
+            } else {
+                ++g_reuseMisses;
+                // Miss (or battle boundary): everything stored is stale.
+                g_reuseArena.reset();
+                g_reusePrevRoot = nullptr;
+                g_reusePrevChosen = -1;
+            }
+            if (!g_reuseArena) {
+                g_reuseArena = std::make_unique<MctsArena>();
+            }
+        } else if (g_reuseArena) {
+            nativeResetSearchTree();
+        }
+        MctsArena &arena = reuse ? *g_reuseArena : localArena;
         MctsNode *root = arena.newNode(BattleContext(bc));
         std::unordered_map<NativeStateKey, MctsNode *, NativeStateKeyHash> transTable;
         std::random_device rd;
@@ -3142,6 +3245,30 @@ namespace {
         root->children.assign(root->actions.size(), nullptr);
         root->chanceChildren.assign(root->actions.size(), {});
         root->chanceSamplesDrawn.assign(root->actions.size(), 0);
+        if (reused != nullptr && reused->expanded) {
+            // Graft the matched subtrees onto the fresh root by action
+            // IDENTITY. The fresh root's indices bind to the real state; the
+            // stored subtrees keep their own internally consistent worlds.
+            // Duplicate identities (two identical Strikes) graft first-come,
+            // which loses nothing: post-dedup the fresh list has no twins.
+            for (std::size_t fi = 0; fi < root->actions.size(); ++fi) {
+                const std::uint64_t wantId =
+                    nativeActionIdentity(root->bc, root->actions[fi]);
+                if (wantId == 0) {
+                    continue;
+                }
+                for (std::size_t si = 0; si < reused->actions.size(); ++si) {
+                    if (nativeActionIdentity(reused->bc, reused->actions[si])
+                            != wantId) {
+                        continue;
+                    }
+                    root->children[fi] = reused->children[si];
+                    root->chanceChildren[fi] = reused->chanceChildren[si];
+                    root->chanceSamplesDrawn[fi] = reused->chanceSamplesDrawn[si];
+                    break;
+                }
+            }
+        }
         {
             const std::vector<double> scores = nativeHeuristicScores(root->bc, root->actions);
             root->visitOrder = nativeHeuristicVisitOrder(scores);
@@ -3347,6 +3474,10 @@ namespace {
                 bestIdx = idx;
             }
         }
+        if (reuse) {
+            g_reusePrevRoot = root;
+            g_reusePrevChosen = bestIdx;
+        }
         return {root->actions[bestIdx], std::vector<std::int64_t>(root->N.begin(), root->N.end())};
     }
 
@@ -3360,7 +3491,27 @@ namespace {
         // its RNG has to be tied to this call's seed or the search is not reproducible
         // and sibling candidates lose common random numbers.
         nativeSeedGumbel(useSearchSeed ? searchSeed : std::random_device{}());
-        MctsArena arena;
+        const bool reuse = g_params.treeReuse != 0.0;
+        MctsArena localArena;
+        MctsNode *reused = nullptr;
+        if (reuse) {
+            reused = nativeFindReuseRoot(bc);
+            if (reused != nullptr) {
+                ++g_reuseHits;
+            } else {
+                ++g_reuseMisses;
+                // Miss (or battle boundary): everything stored is stale.
+                g_reuseArena.reset();
+                g_reusePrevRoot = nullptr;
+                g_reusePrevChosen = -1;
+            }
+            if (!g_reuseArena) {
+                g_reuseArena = std::make_unique<MctsArena>();
+            }
+        } else if (g_reuseArena) {
+            nativeResetSearchTree();
+        }
+        MctsArena &arena = reuse ? *g_reuseArena : localArena;
         MctsNode *root = arena.newNode(BattleContext(bc));
         std::unordered_map<NativeStateKey, MctsNode *, NativeStateKeyHash> transTable;
         std::random_device rd;
@@ -3393,6 +3544,10 @@ namespace {
                 bestN = root->N[i];
                 bestIdx = static_cast<int>(i);
             }
+        }
+        if (reuse) {
+            g_reusePrevRoot = root;
+            g_reusePrevChosen = bestIdx;
         }
         return {root->actions[bestIdx], std::vector<std::int64_t>(root->N.begin(), root->N.end())};
     }
@@ -4947,6 +5102,9 @@ PYBIND11_MODULE(slaythespire, m) {
         })
         .def("get_legal_actions", &sts::py::getLegalActions)
         .def("get_monster_move_damage", &sts::py::getMonsterMoveDamage)
+        .def_static("reuse_diag", []() {
+            return pybind11::make_tuple(g_reuseHits, g_reuseMisses);
+        })
         .def_static("merge_diag", []() {
             return pybind11::make_tuple(g_chanceMergeSamples, g_chanceMergeHits);
         })
@@ -5419,6 +5577,7 @@ PYBIND11_MODULE(slaythespire, m) {
         d["merge_chance_outcomes"] = g_params.mergeChanceOutcomes;
         d["intangible_attack_penalty"] = g_params.intangibleAttackPenalty;
         d["artifact_aware_debuffs"] = g_params.artifactAwareDebuffs;
+        d["tree_reuse"] = g_params.treeReuse;
         d["honest_wc_chance"] = g_params.honestWcChance;
         d["honest_wa_chance"] = g_params.honestWaChance;
         d["c_puct"] = g_params.cPuct;
@@ -5441,6 +5600,10 @@ PYBIND11_MODULE(slaythespire, m) {
        "see its own comment above BattleContext's binding), as a dict keyed by snake_case "
        "name -- the exact keys set_search_params accepts. Defaults match this session's own "
        "hand-tuned/chosen values.");
+
+    m.def("reset_search_tree", &nativeResetSearchTree,
+          "Discard any battle-long reused search tree (tree_reuse). Call at "
+          "battle boundaries; a state-key miss also clears it automatically.");
 
     m.def("reset_search_config", []() {
         g_params = TunableParams{};
@@ -5527,6 +5690,7 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("merge_chance_outcomes", g_params.mergeChanceOutcomes);
         setIf("intangible_attack_penalty", g_params.intangibleAttackPenalty);
         setIf("artifact_aware_debuffs", g_params.artifactAwareDebuffs);
+        setIf("tree_reuse", g_params.treeReuse);
         setIf("honest_wc_chance", g_params.honestWcChance);
         setIf("honest_wa_chance", g_params.honestWaChance);
         setIf("c_puct", g_params.cPuct);
