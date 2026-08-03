@@ -307,6 +307,21 @@ index the draw pile by position, and the honest-mode permutation ran between
 enumeration and execution, re-pointing the index. Fixed and pinned by
 `tests/test_honest_draw_pile.py`.
 
+**The honest wall was one constant, and it is fixed (2026-08-03, night).**
+The shipped DPW pair `wc_chance = 0.32, wa = 0.035` caps every chance node at
+ONE sibling — the honest tree committed to a single determinization per node,
+which *was* the thrice-replicated flat budget curve. Found by the telemetry of
+a refuted experiment (info-set sibling merging: fires at 47.9% once widening
+exists, adds nothing — the cure was multiple determinizations, not pooling).
+Fixed regime-conditionally (`honest_wc_chance = 4.6 / 0.37`, silverbot's own
+constants; clairvoyant keeps the shipped pair — lifting the cap there costs
+−2.82 ± 0.76, the CMA was right for its regime). Three-split record: train
+killers +9.13 @900 (t = 8.3), full val +4.08 (t = 8.41), sealed test
+**+3.88 ± 0.50 (t = 7.71)** — honest test −10.47 → **−6.59**, tying the
+originally recorded silverbot number with a single honest tree and beating
+their matched base-100 (−7.48). Voting's +5.91 is now understood as the
+ensemble externally supplying the diversity the capped tree denied itself.
+
 **Sealed test shot (honest, k=3): flat −10.41 → vote −8.09** (+2.32 ± 0.37,
 t = 6.28; deaths 312 → 265). Compute-neutral voting is refuted: at fixed 100
 sims, 2×50/3×33/5×20 all lose 3-4 HP to 1×100 (t ≤ −3.6) — the vote's value
