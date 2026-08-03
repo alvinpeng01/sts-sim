@@ -478,6 +478,19 @@ namespace {
         double escalationSims = 0.0;
         double escalationQgap = 0.25;
         double escalationDangerFrac = 0.25;
+        // Level-1 belief-MDP port (docs/13): merge DPW chance-node SIBLINGS
+        // whose states are the same information set. Silverbot's search keys
+        // nodes by information set -- pile as unordered multiset -- and >half
+        // of their chance samples merge, which is where their honest budget
+        // slope comes from (statistics pool on one posterior instead of
+        // fragmenting across private determinized subtrees). Sibling scope
+        // (same parent, same action) is safe by construction: visible zones
+        // share a history, so equality differs only in hidden-order noise.
+        //   0 = off; 1 = draw pile compared as multiset; 2 = +hand as
+        //   multiset (drawn order is visible but gameplay-inert); 3 =
+        //   +discard as multiset (order matters only through reshuffles,
+        //   which honest mode re-randomizes anyway).
+        double mergeChanceOutcomes = 0.0;
 
         // PUCT-style prior bonus in nativeSelectIdx, on top of (not replacing) the existing
         // UCB1 exploration term -- see nativeSelectIdx's own comment for the formula. cPuct=0.0
@@ -2729,6 +2742,12 @@ namespace {
     double g_lastRootValueGap = -1.0;
     bool g_lastSearchDangerous = false;
     bool g_lastSearchEscalated = false;
+    // Chance-sibling merge telemetry (merge_chance_outcomes): samples drawn
+    // and dedup hits across the lifetime of the process. A "hit" is a DPW
+    // sample that reached an information set an existing sibling already
+    // represents; the visit is routed there and the sample is discarded.
+    std::int64_t g_chanceMergeSamples = 0;
+    std::int64_t g_chanceMergeHits = 0;
 
     bool nativePairingActive() {
         return g_params.pairedDeterminization != 0.0 && g_pairIndex >= 0
@@ -2749,6 +2768,19 @@ namespace {
         NativeStateKeyHash::mix(h, std::hash<std::uint64_t>()(crnBase));
         NativeStateKeyHash::mix(h, std::hash<int>()(localSampleIndex));
         return h;
+    }
+
+    NativeStateKey nativeInfoSetKey(const BattleContext &bc) {
+        NativeStateKey key = nativeStateKey(bc);
+        const int level = static_cast<int>(g_params.mergeChanceOutcomes);
+        std::sort(key.draw.begin(), key.draw.end());
+        if (level >= 2) {
+            std::sort(key.hand.begin(), key.hand.end());
+        }
+        if (level >= 3) {
+            std::sort(key.discard.begin(), key.discard.end());
+        }
+        return key;
     }
 
     MctsNode *nativeDpwChanceChild(MctsArena &arena, MctsNode *node, int idx, const search::Action &action,
@@ -2796,20 +2828,28 @@ namespace {
             }
 
             MctsNode *child = nullptr;
-            if (g_useStateMerging) {
-                NativeStateKey sampleKey = nativeStateKey(sample);
+            const bool mergeSiblings = g_useStateMerging
+                || g_params.mergeChanceOutcomes != 0.0;
+            if (mergeSiblings) {
+                ++g_chanceMergeSamples;
+                const NativeStateKey sampleKey =
+                    g_params.mergeChanceOutcomes != 0.0
+                        ? nativeInfoSetKey(sample) : nativeStateKey(sample);
                 for (MctsNode *existing : siblings) {
                     if (existing->hasKey && existing->key == sampleKey) {
                         child = existing;
+                        ++g_chanceMergeHits;
                         break;
                     }
                 }
             }
             if (child == nullptr) {
                 child = arena.newNode(std::move(sample));
-                if (g_useStateMerging) {
+                if (mergeSiblings) {
                     child->hasKey = true;
-                    child->key = nativeStateKey(child->bc);
+                    child->key = g_params.mergeChanceOutcomes != 0.0
+                        ? nativeInfoSetKey(child->bc)
+                        : nativeStateKey(child->bc);
                 }
                 if (child->bc.outcome != Outcome::UNDECIDED) {
                     child->isTerminal = true;
@@ -2920,9 +2960,11 @@ namespace {
                     child->isTerminal = true;
                     child->terminalValue = NATIVE_W_SHAPE * nativeExpectimaxTerminalReward(child->bc, child->bc.turn);
                 }
-                if (g_useStateMerging) {
+                if (g_useStateMerging || g_params.mergeChanceOutcomes != 0.0) {
                     child->hasKey = true;
-                    child->key = nativeStateKey(child->bc);
+                    child->key = g_params.mergeChanceOutcomes != 0.0
+                        ? nativeInfoSetKey(child->bc)
+                        : nativeStateKey(child->bc);
                 }
                 node->chanceChildren[idx] = {child};
                 node->chanceSamplesDrawn[idx] = 1;
@@ -4853,6 +4895,9 @@ PYBIND11_MODULE(slaythespire, m) {
         })
         .def("get_legal_actions", &sts::py::getLegalActions)
         .def("get_monster_move_damage", &sts::py::getMonsterMoveDamage)
+        .def_static("merge_diag", []() {
+            return pybind11::make_tuple(g_chanceMergeSamples, g_chanceMergeHits);
+        })
         .def_static("last_search_diag", []() {
             return pybind11::make_tuple(g_lastRootValueGap,
                                         g_lastSearchDangerous,
@@ -5319,6 +5364,7 @@ PYBIND11_MODULE(slaythespire, m) {
         d["escalation_sims"] = g_params.escalationSims;
         d["escalation_qgap"] = g_params.escalationQgap;
         d["escalation_danger_frac"] = g_params.escalationDangerFrac;
+        d["merge_chance_outcomes"] = g_params.mergeChanceOutcomes;
         d["c_puct"] = g_params.cPuct;
         d["puct_temperature"] = g_params.puctTemperature;
         d["policy_net_weight"] = g_params.policyNetWeight;
@@ -5422,6 +5468,7 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("escalation_sims", g_params.escalationSims);
         setIf("escalation_qgap", g_params.escalationQgap);
         setIf("escalation_danger_frac", g_params.escalationDangerFrac);
+        setIf("merge_chance_outcomes", g_params.mergeChanceOutcomes);
         setIf("c_puct", g_params.cPuct);
         setIf("puct_temperature", g_params.puctTemperature);
         setIf("policy_net_weight", g_params.policyNetWeight);
