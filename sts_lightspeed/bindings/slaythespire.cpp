@@ -491,6 +491,17 @@ namespace {
         //   +discard as multiset (order matters only through reshuffles,
         //   which honest mode re-randomizes anyway).
         double mergeChanceOutcomes = 0.0;
+        // Honest-regime DPW widening. The shipped wc/wa pair (0.320/0.035)
+        // caps every chance node at ONE sibling -- correct for clairvoyant
+        // play at 100 sims (chance = monster rolls; the cap re-measured
+        // -2.82 +/- 0.76 WORSE when lifted there), catastrophic under honest
+        // draws (the tree commits to a single determinization per node; the
+        // thrice-replicated flat honest budget curve was exactly this).
+        // Honest play switches to this pair: -0.79 -> +9.11 slope on train
+        // killers (t = 10.7), +4.08 +/- 0.49 (t = 8.41) on full val at 900.
+        // Values are silverbot's own widening constants. -1 = inherit wc/wa.
+        double honestWcChance = 4.6;
+        double honestWaChance = 0.37;
 
         // PUCT-style prior bonus in nativeSelectIdx, on top of (not replacing) the existing
         // UCB1 exploration term -- see nativeSelectIdx's own comment for the formula. cPuct=0.0
@@ -2787,7 +2798,11 @@ namespace {
                                     bool useCrn, std::uint64_t crnBase, std::mt19937_64 &rng) {
         auto &siblings = node->chanceChildren[idx];
         const std::int64_t n = node->N[idx];
-        const int wideningCap = static_cast<int>(std::ceil(g_params.wcChance * std::pow(static_cast<double>(n + 1), g_params.waChance)));
+        const double wc = (nativeHonestDrawOrder() && g_params.honestWcChance >= 0.0)
+            ? g_params.honestWcChance : g_params.wcChance;
+        const double wa = (nativeHonestDrawOrder() && g_params.honestWaChance >= 0.0)
+            ? g_params.honestWaChance : g_params.waChance;
+        const int wideningCap = static_cast<int>(std::ceil(wc * std::pow(static_cast<double>(n + 1), wa)));
         if (static_cast<int>(siblings.size()) < wideningCap) {
             const int localSampleIndex = node->chanceSamplesDrawn[idx];
             node->chanceSamplesDrawn[idx] = localSampleIndex + 1;
@@ -5365,6 +5380,8 @@ PYBIND11_MODULE(slaythespire, m) {
         d["escalation_qgap"] = g_params.escalationQgap;
         d["escalation_danger_frac"] = g_params.escalationDangerFrac;
         d["merge_chance_outcomes"] = g_params.mergeChanceOutcomes;
+        d["honest_wc_chance"] = g_params.honestWcChance;
+        d["honest_wa_chance"] = g_params.honestWaChance;
         d["c_puct"] = g_params.cPuct;
         d["puct_temperature"] = g_params.puctTemperature;
         d["policy_net_weight"] = g_params.policyNetWeight;
@@ -5469,6 +5486,8 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("escalation_qgap", g_params.escalationQgap);
         setIf("escalation_danger_frac", g_params.escalationDangerFrac);
         setIf("merge_chance_outcomes", g_params.mergeChanceOutcomes);
+        setIf("honest_wc_chance", g_params.honestWcChance);
+        setIf("honest_wa_chance", g_params.honestWaChance);
         setIf("c_puct", g_params.cPuct);
         setIf("puct_temperature", g_params.puctTemperature);
         setIf("policy_net_weight", g_params.policyNetWeight);
