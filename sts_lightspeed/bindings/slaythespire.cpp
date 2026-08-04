@@ -530,6 +530,17 @@ namespace {
         // measured on cap-1 fragmented trees; widened honest trees are worth
         // keeping. 0 = off.
         double treeReuse = 0.0;
+        // Survival mode for the rollout player. The Heart oracle grid
+        // (2026-08-04) localized the last big deficit to the ROLLOUT POLICY:
+        // clairvoyant at 3000 sims still dies 74% of Heart fights (human: 0%)
+        // because the simulated player's attack-dominant scoring cannot
+        // survive burst windows, flattening every leaf value the tree sees.
+        // When unblocked telegraph >= survivalModeThreshold * curHp, ATTACK
+        // scores are multiplied by survivalModeAttackScale -- a mode switch
+        // the existing additive danger nudges could never amount to.
+        // threshold <= 0 disables.
+        double survivalModeThreshold = 0.0;
+        double survivalModeAttackScale = 0.25;
 
         // PUCT-style prior bonus in nativeSelectIdx, on top of (not replacing) the existing
         // UCB1 exploration term -- see nativeSelectIdx's own comment for the formula. cPuct=0.0
@@ -1527,6 +1538,9 @@ namespace {
             if (g_params.selfDamageScorePenalty != 0.0) {
                 perCardBonus -= g_params.selfDamageScorePenalty * nativeImmediateSelfDamage(card);
             }
+            const bool survivalMode = g_params.survivalModeThreshold > 0.0
+                && ctx.unblocked >= g_params.survivalModeThreshold
+                    * std::max(1, static_cast<int>(sim.player.curHp));
             if (ctype == CardType::ATTACK) {
                 double s = g_params.attackBase;
                 const int targetIdx = a.getTargetIdx();
@@ -1550,6 +1564,9 @@ namespace {
                 }
                 s += nativeVulnerableApplyBonus(sim, a, card);
                 s += nativeWeakApplyBonus(sim, a, card);
+                if (survivalMode) {
+                    s *= g_params.survivalModeAttackScale;
+                }
                 score = s + perCardBonus;
             } else if (ctype == CardType::SKILL) {
                 // SKILL branch gets the same term: Shockwave applies Vulnerable and is a Skill.
@@ -1596,6 +1613,9 @@ namespace {
                 }
                 s += nativeVulnerableApplyBonus(sim, a, card);
                 s += nativeWeakApplyBonus(sim, a, card);
+                if (survivalMode) {
+                    s *= g_params.survivalModeAttackScale;
+                }
                 score = s + perCardBonus;
             } else if (ctype == CardType::POWER) {
                 // Was a flat powerScore for every Power. Two additive terms now separate them:
@@ -4752,6 +4772,15 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("seed", &GameContext::seed)
         .def_readwrite("cur_map_node_x", &GameContext::curMapNodeX)
         .def_readwrite("cur_map_node_y", &GameContext::curMapNodeY)
+        // The engine has always known which elite is burning
+        // (BattleContext.cpp:69 applies the buff by comparing these; the
+        // emerald key is awarded the same way at GameContext.cpp:1959) but
+        // never exposed it, so neither a rule nor the policy could seek the
+        // green key -- acquisition was pure stumble-and-take.
+        .def_property_readonly("burning_elite_x", [](const GameContext &gc) {
+            return gc.map ? gc.map->burningEliteX : -1; })
+        .def_property_readonly("burning_elite_y", [](const GameContext &gc) {
+            return gc.map ? gc.map->burningEliteY : -1; })
         .def_readwrite("cur_room", &GameContext::curRoom)
         .def_readwrite("cur_event", &GameContext::curEvent)
         .def_readwrite("boss", &GameContext::boss)
@@ -5578,6 +5607,8 @@ PYBIND11_MODULE(slaythespire, m) {
         d["intangible_attack_penalty"] = g_params.intangibleAttackPenalty;
         d["artifact_aware_debuffs"] = g_params.artifactAwareDebuffs;
         d["tree_reuse"] = g_params.treeReuse;
+        d["survival_mode_threshold"] = g_params.survivalModeThreshold;
+        d["survival_mode_attack_scale"] = g_params.survivalModeAttackScale;
         d["honest_wc_chance"] = g_params.honestWcChance;
         d["honest_wa_chance"] = g_params.honestWaChance;
         d["c_puct"] = g_params.cPuct;
@@ -5691,6 +5722,8 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("intangible_attack_penalty", g_params.intangibleAttackPenalty);
         setIf("artifact_aware_debuffs", g_params.artifactAwareDebuffs);
         setIf("tree_reuse", g_params.treeReuse);
+        setIf("survival_mode_threshold", g_params.survivalModeThreshold);
+        setIf("survival_mode_attack_scale", g_params.survivalModeAttackScale);
         setIf("honest_wc_chance", g_params.honestWcChance);
         setIf("honest_wa_chance", g_params.honestWaChance);
         setIf("c_puct", g_params.cPuct);
