@@ -546,6 +546,14 @@ namespace {
         // default-off; gates are TARGETED SLICES (Feed decks / thief fights /
         // Writhing Mass) measuring the behavior itself plus a paired HP
         // no-harm guard, since the benchmark objective cannot see these.
+        // Bonus on a DRAW card when energy remains after paying for it, so the
+        // cards it finds can still be played this turn. Zero when the draw
+        // would be the turn's last action (nothing left to use it on).
+        double drawFirstBonus = 0.0;
+        // Scales a one-turn strength stripper by the fraction of current HP
+        // the telegraph threatens: worthless on a safe turn, decisive on the
+        // burst turn. Mirror of intangibleAttackPenalty.
+        double burstDebuffTimingWeight = 0.0;
         double maxHpGainWeight = 0.0;    // per max-HP point vs the search root (Feed, Darkstone)
         double goldDeltaWeight = 0.0;    // per gold vs the root (thief escapes lose it; kills refund)
         double parasitePenaltyWeight = 0.0;  // flat, when Writhing Mass's implant fired (Omamori negates)
@@ -983,6 +991,35 @@ namespace {
             || id == CardId::BOUNCING_FLASK || id == CardId::NOXIOUS_FUMES
             || id == CardId::CATALYST || id == CardId::ENVENOM
             || id == CardId::CRIPPLING_CLOUD || id == CardId::CORPSE_EXPLOSION;
+    }
+
+    // Cards that DRAW. Playing these before the rest of the turn strictly
+    // dominates playing them after, whenever energy remains to use what they
+    // find: the same cards get played either way, but drawing first widens
+    // the choice set for every later play this turn. Standalone card value
+    // cannot express an ordering preference between two cards both of which
+    // will be played, which is exactly what the decision miner measured us
+    // getting wrong (Pommel before Carnage, 60 states; Offering first, 62).
+    bool isDrawCard(CardId id) {
+        return id == CardId::POMMEL_STRIKE || id == CardId::OFFERING
+            || id == CardId::BATTLE_TRANCE || id == CardId::SHRUG_IT_OFF
+            || id == CardId::BURNING_PACT || id == CardId::TRUE_GRIT
+            || id == CardId::WARCRY || id == CardId::DUAL_WIELD
+            || id == CardId::ACROBATICS || id == CardId::BACKFLIP
+            || id == CardId::PREPARED || id == CardId::PANIC_BUTTON   // Ironclad/Silent/colorless
+            || id == CardId::ESCAPE_PLAN || id == CardId::CLOAK_AND_DAGGER
+            || id == CardId::SKIM || id == CardId::COOLHEADED
+            || id == CardId::COMPILE_DRIVER || id == CardId::COLD_SNAP   // Defect
+            || id == CardId::COLLECT || id == CardId::FLASH_OF_STEEL;
+    }
+
+    // One-turn strength strippers. Their entire value is timing: played on the
+    // turn a big multi-hit attack is telegraphed they erase most of it, played
+    // any other turn they do nothing. Scored flat by skillBase today, so the
+    // rollout spends them early and has nothing for the burst.
+    bool isBurstDebuffCard(CardId id) {
+        return id == CardId::DARK_SHACKLES || id == CardId::PIERCING_WAIL
+            || id == CardId::DISARM;
     }
 
     // Cards whose primary purpose is generating immediate block -- suppressed
@@ -1570,6 +1607,10 @@ namespace {
             if (g_params.selfDamageScorePenalty != 0.0) {
                 perCardBonus -= g_params.selfDamageScorePenalty * nativeImmediateSelfDamage(card);
             }
+            if (g_params.drawFirstBonus != 0.0 && isDrawCard(card.id)
+                && sim.player.energy > std::max(0, static_cast<int>(card.costForTurn))) {
+                perCardBonus += g_params.drawFirstBonus;
+            }
             const bool survivalMode = g_params.survivalModeThreshold > 0.0
                 && ctx.unblocked >= g_params.survivalModeThreshold
                     * std::max(1, static_cast<int>(sim.player.curHp));
@@ -1613,6 +1654,10 @@ namespace {
                 // above any attack.
                 const double dangerFraction = ctx.unblocked / std::max(1, sim.player.curHp);
                 double s = g_params.skillBase + dangerFraction * g_params.skillDangerScale;
+                if (g_params.burstDebuffTimingWeight != 0.0
+                    && isBurstDebuffCard(card.id)) {
+                    s += g_params.burstDebuffTimingWeight * dangerFraction;
+                }
                 // Only deprioritize skills when there's no real danger this
                 // turn -- hasteWastedDebuffs was meant to catch DEBUFF-
                 // applying skills about to be wiped for free (Haste wipes
@@ -5643,6 +5688,8 @@ PYBIND11_MODULE(slaythespire, m) {
         d["intangible_attack_penalty"] = g_params.intangibleAttackPenalty;
         d["artifact_aware_debuffs"] = g_params.artifactAwareDebuffs;
         d["tree_reuse"] = g_params.treeReuse;
+        d["draw_first_bonus"] = g_params.drawFirstBonus;
+        d["burst_debuff_timing_weight"] = g_params.burstDebuffTimingWeight;
         d["max_hp_gain_weight"] = g_params.maxHpGainWeight;
         d["gold_delta_weight"] = g_params.goldDeltaWeight;
         d["parasite_penalty_weight"] = g_params.parasitePenaltyWeight;
@@ -5761,6 +5808,8 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("intangible_attack_penalty", g_params.intangibleAttackPenalty);
         setIf("artifact_aware_debuffs", g_params.artifactAwareDebuffs);
         setIf("tree_reuse", g_params.treeReuse);
+        setIf("draw_first_bonus", g_params.drawFirstBonus);
+        setIf("burst_debuff_timing_weight", g_params.burstDebuffTimingWeight);
         setIf("max_hp_gain_weight", g_params.maxHpGainWeight);
         setIf("gold_delta_weight", g_params.goldDeltaWeight);
         setIf("parasite_penalty_weight", g_params.parasitePenaltyWeight);
