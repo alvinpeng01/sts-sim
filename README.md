@@ -258,6 +258,12 @@ The short list:
   per-fight sd 13.73 → 7.82 and the spurious t to 0.86. `_param_ab.py` defaults
   to `--seeds 3`; **effects of 1–2 HP measured at one seed are not
   distinguishable from noise**, which covers most of the combat results here.
+- **k=3 varies the search seed, not the shuffle.**  seeds every
+  fight identically, so the k seeds replay the same draw order with different
+  search noise. That is correct (common random numbers) for paired A/Bs — every
+  comparison here stands — but it under-samples *absolute* rates. Measured: 12
+  Heart decks × 6 battle seeds gave 6 lost-on-all, 2 won-on-all, 4 mixed. Say
+  which seed varied before calling a failure systematic.
 - **A sub-t=2 result that survives one replication is still probably nothing.**
   The routing-bias probe read +0.50 ± 0.44 at n = 120, then +0.41 ± 0.25 at
   n = 350 on fresh seeds — two independent seed sets agreeing on sign and
