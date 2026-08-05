@@ -542,6 +542,9 @@ namespace {
         // Bilinear rollout student (docs/14): adds studentWeight * (bias[card]
         // + emb[card] . proj) to each CARD score, proj computed once per node.
         // 0 = off. Requires load_bilinear_student.
+        // Node budget for leaf_eval_mode "turnsearch" (nativeTurnSearchValue).
+        // Bounds the exhaustive per-turn enumeration that replaces the playout.
+        double turnSearchNodeCap = 400.0;
         double studentWeight = 0.0;
         double survivalModeThreshold = 0.0;
         double survivalModeAttackScale = 0.25;
@@ -553,6 +556,11 @@ namespace {
         // Bonus on a DRAW card when energy remains after paying for it, so the
         // cards it finds can still be played this turn. Zero when the draw
         // would be the turn's last action (nothing left to use it on).
+        // Mirror of selfDamageScorePenalty: credit for HP a card gives back
+        // (Bite, Bandage Up, Feed's max HP) and for Reaper's lifesteal, scaled
+        // by how much of it is actually needed -- healing at full HP is worth
+        // nothing, healing at 20% is worth a great deal. 0 = off.
+        double healScoreWeight = 0.0;
         double drawFirstBonus = 0.0;
         // Scales a one-turn strength stripper by the fraction of current HP
         // the telegraph threatens: worthless on a safe turn, decisive on the
@@ -1127,6 +1135,25 @@ namespace {
         }
     }
 
+    // Immediate HP a card GIVES BACK, the mirror of nativeImmediateSelfDamage.
+    // Without this the scorer prices only the cost side of an HP-for-tempo
+    // engine: Offering/Bloodletting/Brutality/Combust are all penalised while
+    // Bite's heal, Reaper's lifesteal and Bandage Up are invisible, so a
+    // lifesteal race (the only way a 57-max-HP deck survives the Heart, and
+    // how the human wins those fights) cannot be valued correctly. Reaper is
+    // damage-dependent, so it is credited via the caller which knows the
+    // target; the flat entries are what a card heals unconditionally.
+    int nativeImmediateHeal(const CardInstance &card) {
+        const bool up = card.upgraded;
+        switch (card.id) {
+            case CardId::BITE:        return up ? 3 : 2;
+            case CardId::BANDAGE_UP:  return up ? 6 : 4;
+            case CardId::SELF_REPAIR: return up ? 10 : 7;   // Defect, end of combat
+            case CardId::FEED:        return up ? 4 : 3;    // max HP, on a kill
+            default: return 0;
+        }
+    }
+
     int nativeImmediateSelfDamage(const CardInstance &card) {
         switch (card.id) {
             case CardId::OFFERING: return 6;
@@ -1622,6 +1649,30 @@ namespace {
             }
             if (g_params.selfDamageScorePenalty != 0.0) {
                 perCardBonus -= g_params.selfDamageScorePenalty * nativeImmediateSelfDamage(card);
+            }
+            if (g_params.healScoreWeight != 0.0) {
+                // Scarcity scaling: missing HP as a fraction of max, so the
+                // same heal is worth more the closer to death the player is.
+                const double missing = sim.player.maxHp > 0
+                    ? 1.0 - static_cast<double>(sim.player.curHp) / sim.player.maxHp
+                    : 0.0;
+                int heal = nativeImmediateHeal(card);
+                if (card.id == CardId::REAPER) {
+                    // Lifesteal: heals for unblocked damage dealt across all
+                    // living monsters, so approximate with the card's damage
+                    // against each target that has no block.
+                    const int base = getBaseDamage(card.id, card.upgraded);
+                    for (int i = 0; i < sim.monsters.monsterCount; ++i) {
+                        const Monster &m = sim.monsters.arr[i];
+                        if (m.curHp > 0 && m.block <= 0) {
+                            heal += std::min(sim.calculateCardDamage(card, i, base),
+                                             static_cast<int>(m.curHp));
+                        }
+                    }
+                }
+                if (heal > 0) {
+                    perCardBonus += g_params.healScoreWeight * heal * missing;
+                }
             }
             if (g_params.drawFirstBonus != 0.0 && isDrawCard(card.id)
                 && sim.player.energy > std::max(0, static_cast<int>(card.costForTurn))) {
@@ -2395,6 +2446,65 @@ namespace {
     // tune_value_leaf.py). Held-out this reaches ~53% win at 3.4x rollout speed
     // -- a real recovery from the un-tuned 29%, but a linear ceiling below
     // rollout's 83%, which is why the value-NET (nonlinear) is the next step.
+    // Leaf evaluation by bounded EXHAUSTIVE search over the current turn, in
+    // place of a greedy playout to the end of the fight.
+    //
+    // Measured motivation (2026-08-05, 8 Heart fights, his seeds, k=3): the
+    // rollout policy playing alone wins 0/24 at 99 HP paid; MCTS@30 wins 9/24;
+    // MCTS@900 wins 11/24. Thirty times the budget buys two wins, because the
+    // leaf values being averaged come from a player that cannot pilot. The
+    // beam solver -- which evaluates by enumerating a turn rather than guessing
+    // it -- wins ~18/24 at 43.9 HP. This imports that evaluation into MCTS:
+    // enumerate the turn, let the enemy respond, take the best reachable
+    // outcome. Shallow search with a strong evaluator, the backgammon shape.
+    //
+    // MAX over our own sequences is correct: we choose the line. The enemy's
+    // reply is already inside the value because END_TURN executes their turn.
+    double nativeTurnSearchValue(const BattleContext &bc, int maxTurn) {
+        const int cap = std::max(16, static_cast<int>(g_params.turnSearchNodeCap));
+        double best = -std::numeric_limits<double>::infinity();
+        std::vector<BattleContext> stack;
+        stack.reserve(64);
+        stack.push_back(bc);
+        int nodes = 0;
+        while (!stack.empty() && nodes < cap) {
+            BattleContext cur = std::move(stack.back());
+            stack.pop_back();
+            ++nodes;
+            if (cur.outcome != Outcome::UNDECIDED) {
+                best = std::max(best, NATIVE_W_SHAPE
+                    * nativeExpectimaxTerminalReward(cur, cur.turn));
+                continue;
+            }
+            if (cur.turn >= maxTurn) {
+                best = std::max(best, NATIVE_W_SHAPE * nativePotential(cur));
+                continue;
+            }
+            const auto actions = sts::py::getLegalActions(cur);
+            if (actions.empty()) {
+                best = std::max(best, NATIVE_W_SHAPE * nativePotential(cur));
+                continue;
+            }
+            const int startTurn = cur.turn;
+            for (const auto &a : actions) {
+                BattleContext next(cur);
+                a.execute(next);
+                if (next.outcome != Outcome::UNDECIDED) {
+                    best = std::max(best, NATIVE_W_SHAPE
+                        * nativeExpectimaxTerminalReward(next, next.turn));
+                } else if (next.turn != startTurn) {
+                    // The turn ended and the enemy has acted: this is the
+                    // horizon of the search, scored statically.
+                    best = std::max(best, NATIVE_W_SHAPE * nativePotential(next));
+                } else if (nodes < cap) {
+                    stack.push_back(std::move(next));
+                }
+            }
+        }
+        return best == -std::numeric_limits<double>::infinity()
+            ? NATIVE_W_SHAPE * nativePotential(bc) : best;
+    }
+
     double nativeLeafValueEstimate(const BattleContext &bc) {
         const auto f = nativeLeafFeatures(bc);
         return g_params.vfHp * f[0] + g_params.vfBlock * f[1] + g_params.vfEnergy * f[2]
@@ -2597,7 +2707,7 @@ namespace {
     // VALUENET: trained MLP leaf estimate (nativeValueNetEstimate), the
     // nonlinear successor to VALUE's linear estimate. Requires load_value_net
     // first (g_valueNet.loaded) -- set_leaf_eval_mode enforces that.
-    enum class LeafEvalMode { ROLLOUT, VALUE, TRUNCATED, VALUENET };
+    enum class LeafEvalMode { ROLLOUT, VALUE, TRUNCATED, VALUENET, TURNSEARCH };
     LeafEvalMode g_leafEvalMode = LeafEvalMode::ROLLOUT;
     int g_truncatedRolloutSteps = 3;
 
@@ -2605,6 +2715,12 @@ namespace {
                             std::vector<std::uint32_t> *raveTrace = nullptr) {
         if (g_leafEvalMode == LeafEvalMode::ROLLOUT) {
             return nativeHeuristicPlayout(bc, maxTurn, raveTrace);
+        }
+        if (g_leafEvalMode == LeafEvalMode::TURNSEARCH) {
+            if (bc.outcome != Outcome::UNDECIDED) {
+                return NATIVE_W_SHAPE * nativeExpectimaxTerminalReward(bc, bc.turn);
+            }
+            return nativeTurnSearchValue(bc, maxTurn);
         }
         if (g_leafEvalMode == LeafEvalMode::VALUENET) {
             if (bc.outcome != Outcome::UNDECIDED) {
@@ -5777,11 +5893,13 @@ PYBIND11_MODULE(slaythespire, m) {
         d["intangible_attack_penalty"] = g_params.intangibleAttackPenalty;
         d["artifact_aware_debuffs"] = g_params.artifactAwareDebuffs;
         d["tree_reuse"] = g_params.treeReuse;
+        d["heal_score_weight"] = g_params.healScoreWeight;
         d["draw_first_bonus"] = g_params.drawFirstBonus;
         d["burst_debuff_timing_weight"] = g_params.burstDebuffTimingWeight;
         d["max_hp_gain_weight"] = g_params.maxHpGainWeight;
         d["gold_delta_weight"] = g_params.goldDeltaWeight;
         d["parasite_penalty_weight"] = g_params.parasitePenaltyWeight;
+        d["turn_search_node_cap"] = g_params.turnSearchNodeCap;
         d["student_weight"] = g_params.studentWeight;
         d["survival_mode_threshold"] = g_params.survivalModeThreshold;
         d["survival_mode_attack_scale"] = g_params.survivalModeAttackScale;
@@ -5898,11 +6016,13 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("intangible_attack_penalty", g_params.intangibleAttackPenalty);
         setIf("artifact_aware_debuffs", g_params.artifactAwareDebuffs);
         setIf("tree_reuse", g_params.treeReuse);
+        setIf("heal_score_weight", g_params.healScoreWeight);
         setIf("draw_first_bonus", g_params.drawFirstBonus);
         setIf("burst_debuff_timing_weight", g_params.burstDebuffTimingWeight);
         setIf("max_hp_gain_weight", g_params.maxHpGainWeight);
         setIf("gold_delta_weight", g_params.goldDeltaWeight);
         setIf("parasite_penalty_weight", g_params.parasitePenaltyWeight);
+        setIf("turn_search_node_cap", g_params.turnSearchNodeCap);
         setIf("student_weight", g_params.studentWeight);
         setIf("survival_mode_threshold", g_params.survivalModeThreshold);
         setIf("survival_mode_attack_scale", g_params.survivalModeAttackScale);
@@ -5993,6 +6113,8 @@ PYBIND11_MODULE(slaythespire, m) {
         } else if (mode == "truncated") {
             g_leafEvalMode = LeafEvalMode::TRUNCATED;
             g_truncatedRolloutSteps = truncatedSteps;
+        } else if (mode == "turnsearch") {
+            g_leafEvalMode = LeafEvalMode::TURNSEARCH;
         } else if (mode == "valuenet") {
             if (!g_valueNet.loaded) {
                 throw std::invalid_argument("valuenet mode requires load_value_net() first");
@@ -6009,6 +6131,15 @@ PYBIND11_MODULE(slaythespire, m) {
        "middle ground), or 'valuenet' (trained MLP leaf estimate, needs load_value_net first). "
        "Same process-global-mutable-state thread-safety rule as set_search_params: set once "
        "before an evaluation, never mid-flight.");
+
+    m.def("shuffle_draw_pile", [](BattleContext &bc, std::uint64_t seed) {
+        std::mt19937_64 gen(seed);
+        nativeShuffleDrawPile(bc, gen);
+    }, pybind11::arg("bc"), pybind11::arg("seed"),
+       "Permute the draw pile in place, leaving its CONTENTS (and therefore "
+       "everything observable) unchanged. Used to measure whether a decision "
+       "depends on hidden draw order -- the strategy-fusion check for teaching "
+       "an honest player from clairvoyant play.");
 
     m.def("load_bilinear_student", [](pybind11::dict d) {
         BilinearStudent st;
