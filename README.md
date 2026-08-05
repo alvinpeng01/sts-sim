@@ -258,7 +258,7 @@ The short list:
   per-fight sd 13.73 → 7.82 and the spurious t to 0.86. `_param_ab.py` defaults
   to `--seeds 3`; **effects of 1–2 HP measured at one seed are not
   distinguishable from noise**, which covers most of the combat results here.
-- **k=3 varies the search seed, not the shuffle.**  seeds every
+- **k=3 varies the search seed, not the shuffle.** `build_battle` seeds every
   fight identically, so the k seeds replay the same draw order with different
   search noise. That is correct (common random numbers) for paired A/Bs — every
   comparison here stands — but it under-samples *absolute* rates. Measured: 12
