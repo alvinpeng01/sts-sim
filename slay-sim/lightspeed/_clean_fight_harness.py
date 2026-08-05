@@ -59,6 +59,15 @@ CLEAN = ["LAGAVULIN", "NEMESIS", "THREE_SHAPES", "FOUR_SHAPES",
          "SPHERIC_GUARDIAN", "SHELLED_PARASITE_AND_FUNGI",
          "SPHERE_AND_TWO_SHAPES", "GREMLIN_NOB"]
 
+# The other half of the deficit: encounters we DIE in, where the scoring metric
+# has to be survival rather than HP (an HP mean over survivors is exactly the
+# survivorship trap this harness exists to avoid). STS_ENCOUNTERS=boss selects
+# these and switches the report to a paired McNemar test on death/survival.
+BOSS = ["THE_HEART", "SHIELD_AND_SPEAR", "TIME_EATER", "AUTOMATON",
+        "THE_GUARDIAN", "AWAKENED_ONE", "COLLECTOR", "DONU_AND_DECA",
+        "HEXAGHOST", "CHAMP", "SLIME_BOSS", "REPTOMANCER", "BOOK_OF_STABBING",
+        "GREMLIN_LEADER"]
+
 OUT = sys.argv[1]
 OVERRIDES = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
 SIMS = int(sys.argv[3]) if len(sys.argv) > 3 else 100
@@ -106,9 +115,18 @@ def build(rec):
 
 
 SPLITS = os.environ.get("STS_SPLIT", "train").split("+")
+_sel = os.environ.get("STS_ENCOUNTERS", "clean")
+ENCOUNTERS = BOSS if _sel == "boss" else (
+    CLEAN if _sel == "clean" else _sel.split(","))
 recs = [r for r in json.load(open(HUMAN_BENCHMARK, encoding="utf-8"))
-        if r["split"] in SPLITS and r["encounter"] in CLEAN
+        if r["split"] in SPLITS and r["encounter"] in ENCOUNTERS
         and r.get("human_damage") is not None]
+
+# Optional bilinear student (docs/14). Loading it is inert unless a weight
+# selects it, so an unset STS_STUDENT changes nothing.
+_student = os.environ.get("STS_STUDENT")
+if _student:
+    sts.load_bilinear_student(json.load(open(_student, encoding="utf-8")))
 
 ensure_search_config(DEFAULT_SEARCH_CONFIG_PATH)
 params = {"honest_draw_order": 0.0}
@@ -169,4 +187,25 @@ if VS:
                  "BETTER (pays less)" if mean < 0 else "worse (pays more)"),
               flush=True)
         print("  detectable at 2 SE: %.2f HP" % (2 * se), flush=True)
+
+    # Deaths end the run, so they are the primary outcome on the boss set and
+    # are not commensurate with HP. Paired McNemar over every shared fight:
+    # only the DISCORDANT pairs carry information about which config survives
+    # more, and pairing removes the fight-to-fight difficulty variance.
+    shared = [k for k in results if k in base]
+    b = sum(1 for k in shared if base[k] is None and results[k] is not None)
+    c = sum(1 for k in shared if base[k] is not None and results[k] is None)
+    if b + c:
+        chi = (abs(b - c) - 1) ** 2 / float(b + c)      # continuity-corrected
+        base_d = sum(1 for k in shared if base[k] is None)
+        new_d = sum(1 for k in shared if results[k] is None)
+        print("\nSURVIVAL (McNemar, n=%d shared fights):" % len(shared),
+              flush=True)
+        print("  deaths %d -> %d  (%.1f%% -> %.1f%%)"
+              % (base_d, new_d, 100.0 * base_d / len(shared),
+                 100.0 * new_d / len(shared)), flush=True)
+        print("  discordant: saved %d, lost %d   chi2=%.2f  %s"
+              % (b, c, chi,
+                 "SIGNIFICANT (p<0.05)" if chi > 3.84 else "not significant"),
+              flush=True)
 print("done", flush=True)
