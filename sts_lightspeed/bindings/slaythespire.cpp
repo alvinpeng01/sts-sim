@@ -539,6 +539,10 @@ namespace {
         // scores are multiplied by survivalModeAttackScale -- a mode switch
         // the existing additive danger nudges could never amount to.
         // threshold <= 0 disables.
+        // Bilinear rollout student (docs/14): adds studentWeight * (bias[card]
+        // + emb[card] . proj) to each CARD score, proj computed once per node.
+        // 0 = off. Requires load_bilinear_student.
+        double studentWeight = 0.0;
         double survivalModeThreshold = 0.0;
         double survivalModeAttackScale = 0.25;
         // End-state value family (2026-08-04): value that is not HP at battle
@@ -1171,7 +1175,16 @@ namespace {
         int statusCurseCards;
         int skillCards;
         int blockCards;
+        // Bilinear student projection (W . normalized-state), computed once per
+        // node here and reused by every CARD action's score. All zeros when the
+        // student is unloaded or studentWeight == 0.
+        std::array<double, 2> studentProj;
     };
+
+    // Forward decls: g_student and its helpers are defined further down near ValueNet.
+    bool nativeStudentLoaded();
+    std::array<double, 2> nativeStudentProj(const BattleContext &bc);
+    double nativeStudentScore(int cardId, const std::array<double, 2> &proj);
 
     HeuristicContext nativeComputeHeuristicContext(const BattleContext &sim) {
         const double vulnMult = sim.player.hasStatus<PS::VULNERABLE>() ? 1.5 : 1.0;
@@ -1241,9 +1254,12 @@ namespace {
         countPile(sim.cards.hand, sim.cards.cardsInHand);
         countPile(sim.cards.discardPile, sim.cards.discardPile.size());
 
+        const std::array<double, 2> studentProj =
+            (nativeStudentLoaded() && g_params.studentWeight != 0.0)
+                ? nativeStudentProj(sim) : std::array<double, 2>{};
         return {unblocked, timeWarpRisk, hasteWastedDebuffs, livingMonsters, blockSufficient,
                 nativeMonsterHpRatio(sim), powerHorizon,
-                exhaustCards, statusCurseCards, skillCards, blockCards};
+                exhaustCards, statusCurseCards, skillCards, blockCards, studentProj};
     }
 
     // Recurring per-turn value of a Power, in rough damage-equivalent points.
@@ -1610,6 +1626,10 @@ namespace {
             if (g_params.drawFirstBonus != 0.0 && isDrawCard(card.id)
                 && sim.player.energy > std::max(0, static_cast<int>(card.costForTurn))) {
                 perCardBonus += g_params.drawFirstBonus;
+            }
+            if (g_params.studentWeight != 0.0 && nativeStudentLoaded()) {
+                perCardBonus += g_params.studentWeight
+                    * nativeStudentScore(static_cast<int>(card.id), ctx.studentProj);
             }
             const bool survivalMode = g_params.survivalModeThreshold > 0.0
                 && ctx.unblocked >= g_params.survivalModeThreshold
@@ -2426,6 +2446,75 @@ namespace {
             x = std::move(y);
         }
         return x[0];
+    }
+
+    // Bilinear rollout student (docs/14): score(card, state) = bias[card]
+    // + emb[card] . (W . s_state), d = 2. Table-speed conditioning -- the
+    // W.s projection is computed ONCE per node and reused across every action.
+    static constexpr int STUDENT_D = 2;
+    static constexpr int STUDENT_STATE_DIM = NATIVE_LEAF_FEATURE_DIM + 7;  // 37
+    struct BilinearStudent {
+        bool loaded = false;
+        std::vector<double> bias;                                   // [nCards]
+        std::vector<std::array<double, STUDENT_D>> emb;             // [nCards][d]
+        std::array<std::array<double, STUDENT_STATE_DIM>, STUDENT_D> W{};
+        std::array<double, STUDENT_STATE_DIM> sMu{}, sSd{};
+    };
+    BilinearStudent g_student;
+    bool nativeStudentLoaded() { return g_student.loaded; }
+
+    // The 37-dim state vector, in the EXACT order collect_student_data.py used:
+    // 30 leaf features, then energy, unblocked telegraph, unblocked/hp, turn,
+    // act (index 34), living monsters, hand size.
+    std::array<double, STUDENT_STATE_DIM> nativeStudentState(const BattleContext &bc) {
+        std::array<double, STUDENT_STATE_DIM> s{};
+        const auto f = nativeLeafFeatures(bc);
+        for (int i = 0; i < NATIVE_LEAF_FEATURE_DIM; ++i) s[i] = f[i];
+        int incoming = 0, alive = 0;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const Monster &m = bc.monsters.arr[i];
+            if (m.curHp > 0) {
+                ++alive;
+                const auto dh = sts::py::getMonsterMoveDamage(bc, i);
+                incoming += std::max(0, dh.first) * std::max(1, dh.second);
+            }
+        }
+        const int unblocked = std::max(0, incoming - bc.player.block);
+        const int hp = std::max(1, static_cast<int>(bc.player.curHp));
+        s[30] = bc.player.energy;
+        s[31] = unblocked;
+        s[32] = static_cast<double>(unblocked) / hp;
+        s[33] = bc.turn;
+        s[34] = 0.0;  // act: not available in a BattleContext; zeroed in the fit to match
+        s[35] = alive;
+        s[36] = bc.cards.cardsInHand;
+        return s;
+    }
+
+    // W . ((s - mu)/sd), the per-node projection. d values.
+    std::array<double, STUDENT_D> nativeStudentProj(const BattleContext &bc) {
+        const auto s = nativeStudentState(bc);
+        std::array<double, STUDENT_STATE_DIM> z{};
+        for (int i = 0; i < STUDENT_STATE_DIM; ++i) {
+            z[i] = (s[i] - g_student.sMu[i]) / g_student.sSd[i];
+        }
+        std::array<double, STUDENT_D> proj{};
+        for (int d = 0; d < STUDENT_D; ++d) {
+            double acc = 0.0;
+            for (int i = 0; i < STUDENT_STATE_DIM; ++i) acc += g_student.W[d][i] * z[i];
+            proj[d] = acc;
+        }
+        return proj;
+    }
+
+    double nativeStudentScore(int cardId, const std::array<double, STUDENT_D> &proj) {
+        if (!g_student.loaded || cardId < 0
+            || cardId >= static_cast<int>(g_student.bias.size())) {
+            return 0.0;
+        }
+        double acc = g_student.bias[cardId];
+        for (int d = 0; d < STUDENT_D; ++d) acc += g_student.emb[cardId][d] * proj[d];
+        return acc;
     }
 
     // Learned rollout-scoring net: a small MLP over [nativeLeafFeatures (state), nativeActionFeatures
@@ -5693,6 +5782,7 @@ PYBIND11_MODULE(slaythespire, m) {
         d["max_hp_gain_weight"] = g_params.maxHpGainWeight;
         d["gold_delta_weight"] = g_params.goldDeltaWeight;
         d["parasite_penalty_weight"] = g_params.parasitePenaltyWeight;
+        d["student_weight"] = g_params.studentWeight;
         d["survival_mode_threshold"] = g_params.survivalModeThreshold;
         d["survival_mode_attack_scale"] = g_params.survivalModeAttackScale;
         d["honest_wc_chance"] = g_params.honestWcChance;
@@ -5813,6 +5903,7 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("max_hp_gain_weight", g_params.maxHpGainWeight);
         setIf("gold_delta_weight", g_params.goldDeltaWeight);
         setIf("parasite_penalty_weight", g_params.parasitePenaltyWeight);
+        setIf("student_weight", g_params.studentWeight);
         setIf("survival_mode_threshold", g_params.survivalModeThreshold);
         setIf("survival_mode_attack_scale", g_params.survivalModeAttackScale);
         setIf("honest_wc_chance", g_params.honestWcChance);
@@ -5918,6 +6009,38 @@ PYBIND11_MODULE(slaythespire, m) {
        "middle ground), or 'valuenet' (trained MLP leaf estimate, needs load_value_net first). "
        "Same process-global-mutable-state thread-safety rule as set_search_params: set once "
        "before an evaluation, never mid-flight.");
+
+    m.def("load_bilinear_student", [](pybind11::dict d) {
+        BilinearStudent st;
+        auto bias = d["bias"].cast<std::vector<double>>();
+        auto emb = d["emb"].cast<std::vector<std::vector<double>>>();
+        auto W = d["W"].cast<std::vector<std::vector<double>>>();
+        auto mu = d["s_mu"].cast<std::vector<double>>();
+        auto sd = d["s_sd"].cast<std::vector<double>>();
+        if (static_cast<int>(W.size()) != STUDENT_D
+            || static_cast<int>(mu.size()) != STUDENT_STATE_DIM) {
+            throw std::invalid_argument("bilinear student shape mismatch (d/dim)");
+        }
+        st.bias = bias;
+        st.emb.resize(emb.size());
+        for (std::size_t c = 0; c < emb.size(); ++c)
+            for (int j = 0; j < STUDENT_D; ++j) st.emb[c][j] = emb[c][j];
+        for (int dd = 0; dd < STUDENT_D; ++dd)
+            for (int i = 0; i < STUDENT_STATE_DIM; ++i) st.W[dd][i] = W[dd][i];
+        for (int i = 0; i < STUDENT_STATE_DIM; ++i) { st.sMu[i] = mu[i]; st.sSd[i] = sd[i]; }
+        st.loaded = true;
+        g_student = std::move(st);
+    }, pybind11::arg("weights"), "Load the bilinear rollout student (docs/14).");
+
+    m.def("bilinear_state_vector", [](const BattleContext &bc) {
+        const auto s = nativeStudentState(bc);
+        return std::vector<double>(s.begin(), s.end());
+    }, "Parity check: the 37-dim state vector the student sees.");
+
+    m.def("bilinear_score", [](const BattleContext &bc, int cardId) {
+        const auto proj = nativeStudentProj(bc);
+        return nativeStudentScore(cardId, proj);
+    }, "Parity check: student score for one card in this state.");
 
     m.def("load_value_net", [](pybind11::dict d) {
         ValueNet net;
