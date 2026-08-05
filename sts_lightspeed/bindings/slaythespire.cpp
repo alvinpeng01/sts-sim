@@ -541,6 +541,14 @@ namespace {
         // threshold <= 0 disables.
         double survivalModeThreshold = 0.0;
         double survivalModeAttackScale = 0.25;
+        // End-state value family (2026-08-04): value that is not HP at battle
+        // end, which an HP-only objective optimizes straight through. All
+        // default-off; gates are TARGETED SLICES (Feed decks / thief fights /
+        // Writhing Mass) measuring the behavior itself plus a paired HP
+        // no-harm guard, since the benchmark objective cannot see these.
+        double maxHpGainWeight = 0.0;    // per max-HP point vs the search root (Feed, Darkstone)
+        double goldDeltaWeight = 0.0;    // per gold vs the root (thief escapes lose it; kills refund)
+        double parasitePenaltyWeight = 0.0;  // flat, when Writhing Mass's implant fired (Omamori negates)
 
         // PUCT-style prior bonus in nativeSelectIdx, on top of (not replacing) the existing
         // UCB1 exploration term -- see nativeSelectIdx's own comment for the formula. cPuct=0.0
@@ -752,6 +760,11 @@ namespace {
     // explicitly tuned away from it. Only affects boss encounters (nativePostBattleHealedHp returns
     // curHp unchanged for anything else), so this is a true no-op for basic/elite fights regardless
     // of its value.
+    // End-state family root references, captured at search entry
+    // (nativeRunMctsSearchSeqHalving); consumed by the victory branch below.
+    int g_rootMaxHp = 0;
+    int g_rootGold = 0;
+
     double nativeExpectimaxTerminalReward(const BattleContext &bc, int turnAtTerminal) {
         const double base = nativeTerminalReward(bc, turnAtTerminal);
         // Potions still held at the end -- ported from Silver Automaton's own evaluateEndState
@@ -782,9 +795,28 @@ namespace {
                 ? static_cast<double>(effectiveHp) / bc.player.maxHp : 0.0;
             const double hpSafetyWeight = nativeIsAct1EasyPoolEncounter(bc.encounter)
                 ? g_params.earlyActEasyPoolHpSafetyWeight : 0.0;
+            double endStateValue = 0.0;
+            if (g_params.maxHpGainWeight != 0.0) {
+                endStateValue += g_params.maxHpGainWeight
+                    * (bc.player.maxHp - g_rootMaxHp);
+            }
+            if (g_params.goldDeltaWeight != 0.0) {
+                endStateValue += g_params.goldDeltaWeight
+                    * (bc.player.gold - g_rootGold);
+            }
+            if (g_params.parasitePenaltyWeight != 0.0
+                && !bc.player.hasRelic<RelicId::OMAMORI>()) {
+                for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+                    const Monster &m = bc.monsters.arr[i];
+                    if (m.id == MonsterId::WRITHING_MASS && m.miscInfo) {
+                        endStateValue -= g_params.parasitePenaltyWeight;
+                        break;
+                    }
+                }
+            }
             return base + (g_params.winHpWeight + hpSafetyWeight) * effectiveHp - bc.player.curHp + potionScore
                  + winBonusAdjust + g_params.winHpFractionWeight * 100.0 * hpFraction
-                 - turnPenaltyAdjust - energyPenalty;
+                 - turnPenaltyAdjust - energyPenalty + endStateValue;
         }
         // Monsters still standing -- see g_params.aliveMonsterPenaltyWeight's own comment. Counts
         // halfDead (Awakened One phase 1, Darkling mid-revive) as ALIVE: curHp<=0 there means
@@ -3223,6 +3255,8 @@ namespace {
         // its RNG has to be tied to this call's seed or the search is not reproducible
         // and sibling candidates lose common random numbers.
         nativeSeedGumbel(useSearchSeed ? searchSeed : std::random_device{}());
+        g_rootMaxHp = bc.player.maxHp;
+        g_rootGold = bc.player.gold;
         const bool reuse = g_params.treeReuse != 0.0;
         MctsArena localArena;
         MctsNode *reused = nullptr;
@@ -3511,6 +3545,8 @@ namespace {
         // its RNG has to be tied to this call's seed or the search is not reproducible
         // and sibling candidates lose common random numbers.
         nativeSeedGumbel(useSearchSeed ? searchSeed : std::random_device{}());
+        g_rootMaxHp = bc.player.maxHp;
+        g_rootGold = bc.player.gold;
         const bool reuse = g_params.treeReuse != 0.0;
         MctsArena localArena;
         MctsNode *reused = nullptr;
@@ -5607,6 +5643,9 @@ PYBIND11_MODULE(slaythespire, m) {
         d["intangible_attack_penalty"] = g_params.intangibleAttackPenalty;
         d["artifact_aware_debuffs"] = g_params.artifactAwareDebuffs;
         d["tree_reuse"] = g_params.treeReuse;
+        d["max_hp_gain_weight"] = g_params.maxHpGainWeight;
+        d["gold_delta_weight"] = g_params.goldDeltaWeight;
+        d["parasite_penalty_weight"] = g_params.parasitePenaltyWeight;
         d["survival_mode_threshold"] = g_params.survivalModeThreshold;
         d["survival_mode_attack_scale"] = g_params.survivalModeAttackScale;
         d["honest_wc_chance"] = g_params.honestWcChance;
@@ -5722,6 +5761,9 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("intangible_attack_penalty", g_params.intangibleAttackPenalty);
         setIf("artifact_aware_debuffs", g_params.artifactAwareDebuffs);
         setIf("tree_reuse", g_params.treeReuse);
+        setIf("max_hp_gain_weight", g_params.maxHpGainWeight);
+        setIf("gold_delta_weight", g_params.goldDeltaWeight);
+        setIf("parasite_penalty_weight", g_params.parasitePenaltyWeight);
         setIf("survival_mode_threshold", g_params.survivalModeThreshold);
         setIf("survival_mode_attack_scale", g_params.survivalModeAttackScale);
         setIf("honest_wc_chance", g_params.honestWcChance);
