@@ -545,6 +545,10 @@ namespace {
         // Node budget for leaf_eval_mode "turnsearch" (nativeTurnSearchValue).
         // Bounds the exhaustive per-turn enumeration that replaces the playout.
         double turnSearchNodeCap = 400.0;
+        // 0 = raw nativePotential at a search horizon (legacy); 1 = nativeCalibratedHorizonValue,
+        // which puts the horizon on the terminal-reward scale. See that function's comment for
+        // why the raw form is not safe to compare against a terminal reward.
+        double horizonValueMode = 0.0;
         double studentWeight = 0.0;
         double survivalModeThreshold = 0.0;
         double survivalModeAttackScale = 0.25;
@@ -672,6 +676,90 @@ namespace {
             phi -= m.curHp + NATIVE_BETA * info.damage * info.attackCount;
         }
         return phi;
+    }
+
+    double nativeExpectimaxTerminalReward(const BattleContext &bc, int turnAtTerminal);
+
+    // A horizon value expressed on the TERMINAL-REWARD scale.
+    //
+    // nativePotential is a shaping function: only its DIFFERENCES carry meaning, and its
+    // absolute level is dominated by the enemy's raw HP pool, so it lands far below what
+    // the terminal function pays. Under the shipped weights, a Heart fight at 70/90 HP
+    // scores roughly: win ~+1474, loss-with-no-progress ~-390, loss-with-the-boss-95%-dead
+    // ~+288 (lossProgressCreditWeight is 713), and horizon-still-alive ~-815. So the SAME
+    // board scores about 425 WORSE for surviving than for dying, and every max() or backup
+    // that mixes the two families is pulled toward death. That is why turn-search died in
+    // 21-24 of 24 Heart fights rather than merely playing badly.
+    //
+    // Fix: never invent a scale. Evaluate the two ways this fight can actually end using
+    // the very same tuned terminal function the tree scores real terminals with -- "if I
+    // won right now at this HP" and "if I died right now with this board" -- and return a
+    // point between them. The horizon is then inside the real reward band by construction,
+    // for ANY tuning of those weights, and surviving can never score below dying on an
+    // identical board. The interpolation weight is a first-cut win-probability proxy; it
+    // decides risk posture, but no longer the sign of the survive-vs-die comparison.
+    //
+    // Callers guarantee bc is UNDECIDED; terminal states take the terminal reward directly.
+    double nativeCalibratedHorizonValue(const BattleContext &bc) {
+        double enemyCur = 0.0;
+        double enemyMax = 0.0;
+        double incoming = 0.0;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const Monster &m = bc.monsters.arr[i];
+            enemyMax += m.maxHp;
+            if (m.halfDead) {
+                // Mirrors nativePotential: "about to revive", so the full pool is outstanding.
+                enemyCur += m.maxHp;
+                continue;
+            }
+            if (m.curHp <= 0) {
+                continue;
+            }
+            enemyCur += m.curHp;
+            const auto info = m.getMoveBaseDamage(bc);
+            incoming += info.damage * info.attackCount;
+        }
+        const double progress = enemyMax > 0.0
+            ? std::min(1.0, std::max(0.0, 1.0 - enemyCur / enemyMax)) : 1.0;
+        const double hpFrac = bc.player.maxHp > 0
+            ? std::min(1.0, std::max(0.0,
+                static_cast<double>(bc.player.curHp) / bc.player.maxHp))
+            : 0.0;
+
+        // "If I died right now with this board" -- carries lossProgressCreditWeight for
+        // damage already dealt, so a nearly-finished fight has a high floor, exactly as
+        // the real loss branch would score it.
+        BattleContext asLoss(bc);
+        asLoss.outcome = Outcome::PLAYER_LOSS;
+        asLoss.player.curHp = 0;
+        const double lossValue = nativeExpectimaxTerminalReward(asLoss, asLoss.turn);
+
+        // "If I won right now at this HP" -- the ceiling this state is playing toward.
+        BattleContext asWin(bc);
+        asWin.outcome = Outcome::PLAYER_VICTORY;
+        const double winValue = nativeExpectimaxTerminalReward(asWin, asWin.turn);
+
+        // First-cut win-probability proxy: how much of the enemy pool is gone, and how
+        // much of the player's own pool is left. Deliberately crude -- its job is to place
+        // the horizon inside the band, not to be a value net.
+        double w = 0.5 * (progress + hpFrac);
+        const double survivableHp = static_cast<double>(bc.player.curHp)
+                                  + static_cast<double>(bc.player.block);
+        if (incoming > 0.0 && incoming >= survivableHp) {
+            // The queued attack is lethal through current block: this horizon is much
+            // closer to the loss than raw HP/progress suggest.
+            w *= 0.25;
+        }
+        w = std::min(1.0, std::max(0.0, w));
+        return lossValue + w * (winValue - lossValue);
+    }
+
+    // Single point where a search horizon is scored, so the legacy and calibrated forms
+    // stay switchable together across the playout, turn-search and hybrid leaf evaluators.
+    double nativeHorizonValue(const BattleContext &bc) {
+        return g_params.horizonValueMode >= 1.0
+            ? NATIVE_W_SHAPE * nativeCalibratedHorizonValue(bc)
+            : NATIVE_W_SHAPE * nativePotential(bc);
     }
 
     double nativeTerminalReward(const BattleContext &bc, int turnAtTerminal) {
@@ -2163,7 +2251,7 @@ namespace {
                 return NATIVE_W_SHAPE * nativeExpectimaxTerminalReward(sim, sim.turn);
             }
             if (sim.turn >= maxTurn) {
-                return NATIVE_W_SHAPE * nativePotential(sim);
+                return nativeHorizonValue(sim);
             }
             const search::Action action = nativeHeuristicPickFast(sim);
             if (raveTrace != nullptr) {
@@ -2181,7 +2269,7 @@ namespace {
                 nativeShuffleDrawPile(sim, g_drawShuffleRng);
             }
         }
-        return NATIVE_W_SHAPE * nativePotential(sim);
+        return nativeHorizonValue(sim);
     }
 
     // --- native (C++) port of expectimax_search.py's full MCTS loop ---
@@ -2477,12 +2565,12 @@ namespace {
                 continue;
             }
             if (cur.turn >= maxTurn) {
-                best = std::max(best, NATIVE_W_SHAPE * nativePotential(cur));
+                best = std::max(best, nativeHorizonValue(cur));
                 continue;
             }
             const auto actions = sts::py::getLegalActions(cur);
             if (actions.empty()) {
-                best = std::max(best, NATIVE_W_SHAPE * nativePotential(cur));
+                best = std::max(best, nativeHorizonValue(cur));
                 continue;
             }
             const int startTurn = cur.turn;
@@ -2495,14 +2583,73 @@ namespace {
                 } else if (next.turn != startTurn) {
                     // The turn ended and the enemy has acted: this is the
                     // horizon of the search, scored statically.
-                    best = std::max(best, NATIVE_W_SHAPE * nativePotential(next));
+                    best = std::max(best, nativeHorizonValue(next));
                 } else if (nodes < cap) {
                     stack.push_back(std::move(next));
                 }
             }
         }
         return best == -std::numeric_limits<double>::infinity()
-            ? NATIVE_W_SHAPE * nativePotential(bc) : best;
+            ? nativeHorizonValue(bc) : best;
+    }
+
+    // HYBRID leaf evaluation: play the leaf's OWN turn by bounded exhaustive
+    // search, then hand off to the ordinary greedy playout and run to a REAL
+    // terminal.
+    //
+    // Follows directly from the turnsearch refutation (2026-08-05): exhaustive
+    // one-turn evaluation lost 0-3/24 to the rollout's 11/24 because it ends on
+    // a static nativePotential rather than a genuine win/loss. The rollout's
+    // whole virtue is reaching terminals; its whole defect is playing badly on
+    // the way. This keeps the virtue and fixes the defect where it matters most
+    // -- the turn the tree is actually deciding.
+    //
+    // Cost is one turn enumeration plus a normal playout, not an exponential
+    // multi-turn tree, so it stays in rollout's price class.
+    double nativeHybridPlayout(const BattleContext &bc, int maxTurn,
+                               std::vector<std::uint32_t> *raveTrace) {
+        const int cap = std::max(16, static_cast<int>(g_params.turnSearchNodeCap));
+        const int startTurn = bc.turn;
+        // Enumerate this turn; keep the end-of-turn state that scores best by
+        // the same static potential the rollout's own horizon uses.
+        BattleContext bestEnd(bc);
+        double bestScore = -std::numeric_limits<double>::infinity();
+        bool found = false;
+        std::vector<BattleContext> stack;
+        stack.push_back(bc);
+        int nodes = 0;
+        while (!stack.empty() && nodes < cap) {
+            BattleContext cur = std::move(stack.back());
+            stack.pop_back();
+            ++nodes;
+            const auto actions = sts::py::getLegalActions(cur);
+            for (const auto &a : actions) {
+                BattleContext next(cur);
+                a.execute(next);
+                const bool ended = next.outcome != Outcome::UNDECIDED;
+                if (ended || next.turn != startTurn) {
+                    const double sc = ended
+                        ? NATIVE_W_SHAPE * nativeExpectimaxTerminalReward(next, next.turn)
+                        : nativeHorizonValue(next);
+                    if (sc > bestScore) {
+                        bestScore = sc;
+                        bestEnd = next;
+                        found = true;
+                    }
+                } else if (nodes < cap) {
+                    stack.push_back(std::move(next));
+                }
+            }
+        }
+        if (!found) {
+            return nativeHeuristicPlayout(bc, maxTurn, raveTrace);
+        }
+        if (bestEnd.outcome != Outcome::UNDECIDED) {
+            return NATIVE_W_SHAPE
+                * nativeExpectimaxTerminalReward(bestEnd, bestEnd.turn);
+        }
+        // The decisive difference from turnsearch: continue to a real terminal.
+        return nativeHeuristicPlayout(bestEnd, maxTurn, raveTrace);
     }
 
     double nativeLeafValueEstimate(const BattleContext &bc) {
@@ -2707,7 +2854,7 @@ namespace {
     // VALUENET: trained MLP leaf estimate (nativeValueNetEstimate), the
     // nonlinear successor to VALUE's linear estimate. Requires load_value_net
     // first (g_valueNet.loaded) -- set_leaf_eval_mode enforces that.
-    enum class LeafEvalMode { ROLLOUT, VALUE, TRUNCATED, VALUENET, TURNSEARCH };
+    enum class LeafEvalMode { ROLLOUT, VALUE, TRUNCATED, VALUENET, TURNSEARCH, HYBRID };
     LeafEvalMode g_leafEvalMode = LeafEvalMode::ROLLOUT;
     int g_truncatedRolloutSteps = 3;
 
@@ -2715,6 +2862,12 @@ namespace {
                             std::vector<std::uint32_t> *raveTrace = nullptr) {
         if (g_leafEvalMode == LeafEvalMode::ROLLOUT) {
             return nativeHeuristicPlayout(bc, maxTurn, raveTrace);
+        }
+        if (g_leafEvalMode == LeafEvalMode::HYBRID) {
+            if (bc.outcome != Outcome::UNDECIDED) {
+                return NATIVE_W_SHAPE * nativeExpectimaxTerminalReward(bc, bc.turn);
+            }
+            return nativeHybridPlayout(bc, maxTurn, raveTrace);
         }
         if (g_leafEvalMode == LeafEvalMode::TURNSEARCH) {
             if (bc.outcome != Outcome::UNDECIDED) {
@@ -5900,6 +6053,7 @@ PYBIND11_MODULE(slaythespire, m) {
         d["gold_delta_weight"] = g_params.goldDeltaWeight;
         d["parasite_penalty_weight"] = g_params.parasitePenaltyWeight;
         d["turn_search_node_cap"] = g_params.turnSearchNodeCap;
+        d["horizon_value_mode"] = g_params.horizonValueMode;
         d["student_weight"] = g_params.studentWeight;
         d["survival_mode_threshold"] = g_params.survivalModeThreshold;
         d["survival_mode_attack_scale"] = g_params.survivalModeAttackScale;
@@ -6023,6 +6177,7 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("gold_delta_weight", g_params.goldDeltaWeight);
         setIf("parasite_penalty_weight", g_params.parasitePenaltyWeight);
         setIf("turn_search_node_cap", g_params.turnSearchNodeCap);
+        setIf("horizon_value_mode", g_params.horizonValueMode);
         setIf("student_weight", g_params.studentWeight);
         setIf("survival_mode_threshold", g_params.survivalModeThreshold);
         setIf("survival_mode_attack_scale", g_params.survivalModeAttackScale);
@@ -6113,6 +6268,8 @@ PYBIND11_MODULE(slaythespire, m) {
         } else if (mode == "truncated") {
             g_leafEvalMode = LeafEvalMode::TRUNCATED;
             g_truncatedRolloutSteps = truncatedSteps;
+        } else if (mode == "hybrid") {
+            g_leafEvalMode = LeafEvalMode::HYBRID;
         } else if (mode == "turnsearch") {
             g_leafEvalMode = LeafEvalMode::TURNSEARCH;
         } else if (mode == "valuenet") {
