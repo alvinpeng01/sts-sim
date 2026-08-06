@@ -137,8 +137,10 @@ sts.set_leaf_eval_mode("rollout", 3)
 print("CLEAN HARNESS: %d fights x k=%d, sims=%d" % (len(recs), K, SIMS), flush=True)
 print("overrides: %s" % (OVERRIDES or "none (baseline)"), flush=True)
 
+MAX_STEPS = int(os.environ.get("STS_MAX_STEPS", "400"))
 results = {}          # "runid|floor|enc|seedidx" -> damage (or None if died)
 deaths = 0
+stalls = 0
 t0 = time.time()
 for i, rec in enumerate(recs):
     for s_ in range(K):
@@ -148,11 +150,21 @@ for i, rec in enumerate(recs):
         except Exception:
             continue
         hp0 = bc.player_hp
+        # Hard step cap. A config that values survival with no time cost can
+        # prefer stalling forever to dying, which hangs an uncapped loop --
+        # horizon_value_mode=1 does exactly that on boss fights. Cap-hits are
+        # counted separately from deaths: a stall is neither a win nor a loss,
+        # and silently scoring it as either would hide the pathology.
+        steps = 0
         while (bc.outcome == sts.BattleOutcome.UNDECIDED
-               and bc.get_legal_actions()):
+               and bc.get_legal_actions() and steps < MAX_STEPS):
             a, _ = sts.run_mcts_search(bc, SIMS, None, i * 31 + s_)
             a.execute(bc)
-        if bc.outcome == sts.BattleOutcome.PLAYER_VICTORY:
+            steps += 1
+        if steps >= MAX_STEPS:
+            stalls += 1
+            results[key] = None
+        elif bc.outcome == sts.BattleOutcome.PLAYER_VICTORY:
             results[key] = {"dmg": hp0 - bc.player_hp,
                             "human": float(rec["human_damage"]),
                             "enc": rec["encounter"]}
@@ -170,6 +182,10 @@ print("\nvs HUMAN: %+.2f HP/fight  (n=%d, SE %.2f)  deaths %d (%.1f%%)  [%.0fs]"
 
 json.dump({"overrides": OVERRIDES, "sims": SIMS, "k": K, "results": results},
           open(OUT, "w"), indent=0)
+if stalls:
+    print("  STALLS: %d fights hit the %d-step cap (neither win nor loss) -- a "
+          "config that values survival with no time cost prefers stalling to "
+          "dying" % (stalls, MAX_STEPS), flush=True)
 print("wrote", OUT, flush=True)
 
 if VS:
