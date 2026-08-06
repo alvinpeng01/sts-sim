@@ -550,6 +550,15 @@ namespace {
         // why the raw form is not safe to compare against a terminal reward.
         double horizonValueMode = 0.0;
         double studentWeight = 0.0;
+        // Bilinear student applied ONLY to the PUCT prior / visit order, leaving both
+        // rollout action-pickers untouched. studentWeight above enters nativeScoreAction,
+        // which all three consumers share -- the rollout's greedy pick, its sampled pick,
+        // and nativeHeuristicScores -- so the earlier refutation tested the student as a
+        // rollout POLICY and a tree PRIOR bundled together, and could not separate them.
+        // A prior is a much cheaper place for a weak model to help: it only has to order
+        // the first few visits, and the tree's own value estimates overrule it thereafter,
+        // whereas a rollout policy's errors go straight into the leaf value.
+        double studentPriorWeight = 0.0;
         double survivalModeThreshold = 0.0;
         double survivalModeAttackScale = 0.25;
         // End-state value family (2026-08-04): value that is not HP at battle
@@ -1370,7 +1379,8 @@ namespace {
         countPile(sim.cards.discardPile, sim.cards.discardPile.size());
 
         const std::array<double, 2> studentProj =
-            (nativeStudentLoaded() && g_params.studentWeight != 0.0)
+            (nativeStudentLoaded()
+             && (g_params.studentWeight != 0.0 || g_params.studentPriorWeight != 0.0))
                 ? nativeStudentProj(sim) : std::array<double, 2>{};
         return {unblocked, timeWarpRisk, hasteWastedDebuffs, livingMonsters, blockSufficient,
                 nativeMonsterHpRatio(sim), powerHorizon,
@@ -2171,6 +2181,20 @@ namespace {
                 scores[i] = ctx.timeWarpRisk ? g_params.endTurnTimeWarpRiskScore : 5.0;
             } else {
                 scores[i] = nativeScoreAction(sim, legal[i], ctx, stateFeatures);
+                // Prior-only student term. Deliberately added HERE rather than inside
+                // nativeScoreAction so it reaches the PUCT prior and cold-start visit
+                // order without perturbing either rollout picker -- see
+                // g_params.studentPriorWeight's own comment.
+                if (g_params.studentPriorWeight != 0.0 && nativeStudentLoaded()
+                    && legal[i].getActionType() == search::ActionType::CARD) {
+                    const int srcIdx = legal[i].getSourceIdx();
+                    if (srcIdx >= 0 && srcIdx < sim.cards.cardsInHand) {
+                        scores[i] += g_params.studentPriorWeight
+                            * nativeStudentScore(
+                                static_cast<int>(sim.cards.hand[srcIdx].id),
+                                ctx.studentProj);
+                    }
+                }
             }
         }
         return scores;
@@ -6055,6 +6079,7 @@ PYBIND11_MODULE(slaythespire, m) {
         d["turn_search_node_cap"] = g_params.turnSearchNodeCap;
         d["horizon_value_mode"] = g_params.horizonValueMode;
         d["student_weight"] = g_params.studentWeight;
+        d["student_prior_weight"] = g_params.studentPriorWeight;
         d["survival_mode_threshold"] = g_params.survivalModeThreshold;
         d["survival_mode_attack_scale"] = g_params.survivalModeAttackScale;
         d["honest_wc_chance"] = g_params.honestWcChance;
@@ -6179,6 +6204,7 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("turn_search_node_cap", g_params.turnSearchNodeCap);
         setIf("horizon_value_mode", g_params.horizonValueMode);
         setIf("student_weight", g_params.studentWeight);
+        setIf("student_prior_weight", g_params.studentPriorWeight);
         setIf("survival_mode_threshold", g_params.survivalModeThreshold);
         setIf("survival_mode_attack_scale", g_params.survivalModeAttackScale);
         setIf("honest_wc_chance", g_params.honestWcChance);
