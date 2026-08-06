@@ -129,7 +129,12 @@ if _student:
     sts.load_bilinear_student(json.load(open(_student, encoding="utf-8")))
 
 ensure_search_config(DEFAULT_SEARCH_CONFIG_PATH)
-params = {"honest_draw_order": 0.0}
+# REGIME, not a knob. 0.0 = draw-order clairvoyance, which tune_search_human
+# measures at ~4.9 HP -- enough to swamp every real parameter -- so an A/B is
+# only meaningful within ONE regime, and a result found under clairvoyance does
+# not automatically transfer to honest play. STS_HONEST=1 selects honest.
+params = {"honest_draw_order":
+          1.0 if os.environ.get("STS_HONEST") == "1" else 0.0}
 params.update(OVERRIDES)
 sts.set_search_params(params)
 sts.set_leaf_eval_mode("rollout", 3)
