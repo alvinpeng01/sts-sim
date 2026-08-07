@@ -2645,273 +2645,6 @@ namespace {
         return bestIdx;
     }
 
-    // ----- BEAM-MCTS: turn-level macro-action search ------------------------
-    //
-    // The measured motivation (docs/04, 2026-08-06/07): a beam that enumerates
-    // each turn exhaustively and carries ~20 DIVERSE lines across turns
-    // converts 50% of the boss fights per-card MCTS loses (width 6 buys
-    // nothing, width 20 nearly everything) -- but re-expands every frontier
-    // state every turn and costs 135x. This grafts exactly the part that pays
-    // into MCTS: tree nodes are END-OF-TURN states, an expansion enumerates the
-    // node's turn ONCE (bounded DFS), prunes the end-states to K survivors by
-    // the beam's three-frontier rule (max damage / max HP kept / blend), and
-    // caches them; simulations then descend by UCB and evaluate new children
-    // with the ordinary rollout-to-terminal. One search per TURN, whole line
-    // executed -- replacing the 2-4 per-card searches a turn costs today.
-    //
-    // v1 is evaluated CLAIRVOYANT only (the deployed env's regime, and where
-    // the census deaths are). Under honest draw order a committed line is extra
-    // strategy fusion; the information-set layer is the planned follow-up.
-
-    struct TurnMacroCand {
-        std::vector<search::Action> line;   // includes the closing END_TURN
-        BattleContext state;                // after the enemy has acted
-        bool terminal;
-        double terminalValue;
-    };
-
-    std::uint64_t nativeTurnMacroKey(const BattleContext &bc) {
-        std::uint64_t h = 1469598103934665603ULL;
-        auto mix = [&h](std::uint64_t v) {
-            h ^= v + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
-        };
-        mix(static_cast<std::uint64_t>(bc.player.curHp));
-        mix(static_cast<std::uint64_t>(bc.player.block));
-        mix(static_cast<std::uint64_t>(bc.player.energy));
-        std::array<int, 10> hand{};
-        const int n = std::min<int>(bc.cards.cardsInHand, 10);
-        for (int i = 0; i < n; ++i) {
-            hand[i] = static_cast<int>(bc.cards.hand[i].id) * 2
-                    + (bc.cards.hand[i].isUpgraded() ? 1 : 0);
-        }
-        std::sort(hand.begin(), hand.begin() + n);
-        for (int i = 0; i < n; ++i) mix(static_cast<std::uint64_t>(hand[i]));
-        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
-            mix(static_cast<std::uint64_t>(
-                std::max(0, static_cast<int>(bc.monsters.arr[i].curHp))));
-        }
-        return h;
-    }
-
-    int nativeTurnMacroEnemyHp(const BattleContext &bc) {
-        int hp = 0;
-        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
-            const Monster &m = bc.monsters.arr[i];
-            if (m.curHp > 0 || m.halfDead) hp += std::max(0, static_cast<int>(m.curHp));
-        }
-        return hp;
-    }
-
-    // Enumerate this turn once; return terminal candidates plus at most K
-    // undecided end-of-turn states chosen by the three-frontier rule.
-    void nativeTurnMacroExpand(const BattleContext &bc, int nodeCap, int K,
-                               std::vector<TurnMacroCand> &out) {
-        const int enemy0 = nativeTurnMacroEnemyHp(bc);
-        std::vector<TurnMacroCand> undecided;
-        TurnMacroCand bestWin;  bool haveWin = false;
-        TurnMacroCand anyLoss;  bool haveLoss = false;
-
-        struct Item { BattleContext bc; std::vector<search::Action> seq; };
-        std::vector<Item> stack;
-        stack.push_back({bc, {}});
-        std::set<std::uint64_t> seen;
-        seen.insert(nativeTurnMacroKey(bc));
-        int nodes = 0;
-        while (!stack.empty() && nodes < nodeCap) {
-            Item cur = std::move(stack.back());
-            stack.pop_back();
-            ++nodes;
-            const auto actions = sts::py::getLegalActions(cur.bc);
-            for (const auto &a : actions) {
-                BattleContext next(cur.bc);
-                a.execute(next);
-                std::vector<search::Action> seq = cur.seq;
-                seq.push_back(a);
-                if (next.outcome != Outcome::UNDECIDED) {
-                    const double tv = NATIVE_W_SHAPE
-                        * nativeExpectimaxTerminalReward(next, next.turn);
-                    if (next.outcome == Outcome::PLAYER_VICTORY) {
-                        if (!haveWin || next.player.curHp > bestWin.state.player.curHp) {
-                            bestWin = {std::move(seq), std::move(next), true, tv};
-                            haveWin = true;
-                        }
-                    } else if (!haveLoss) {
-                        anyLoss = {std::move(seq), std::move(next), true, tv};
-                        haveLoss = true;
-                    }
-                    continue;
-                }
-                if (a.getActionType() == search::ActionType::END_TURN) {
-                    undecided.push_back({std::move(seq), std::move(next), false, 0.0});
-                    continue;
-                }
-                if (next.turn != cur.bc.turn) {   // safety; should not happen
-                    undecided.push_back({std::move(seq), std::move(next), false, 0.0});
-                    continue;
-                }
-                const std::uint64_t k = nativeTurnMacroKey(next);
-                if (seen.count(k)) continue;
-                seen.insert(k);
-                stack.push_back({std::move(next), std::move(seq)});
-            }
-        }
-
-        out.clear();
-        if (haveWin) out.push_back(std::move(bestWin));
-        if (!undecided.empty()) {
-            const int nU = static_cast<int>(undecided.size());
-            std::vector<int> byDealt(nU), byHp(nU), byBlend(nU);
-            for (int i = 0; i < nU; ++i) byDealt[i] = byHp[i] = byBlend[i] = i;
-            auto dealt = [&](int i) {
-                return enemy0 - nativeTurnMacroEnemyHp(undecided[i].state);
-            };
-            std::sort(byDealt.begin(), byDealt.end(), [&](int a2, int b2) {
-                return dealt(a2) > dealt(b2); });
-            std::sort(byHp.begin(), byHp.end(), [&](int a2, int b2) {
-                return undecided[a2].state.player.curHp > undecided[b2].state.player.curHp; });
-            std::sort(byBlend.begin(), byBlend.end(), [&](int a2, int b2) {
-                return dealt(a2) + 2 * undecided[a2].state.player.curHp
-                     > dealt(b2) + 2 * undecided[b2].state.player.curHp; });
-            std::set<std::uint64_t> taken;
-            std::array<const std::vector<int>*, 3> orders{&byDealt, &byHp, &byBlend};
-            std::array<std::size_t, 3> idx{0, 0, 0};
-            while (static_cast<int>(out.size()) < K + (haveWin ? 1 : 0)) {
-                bool progressed = false;
-                for (int f = 0; f < 3
-                        && static_cast<int>(out.size()) < K + (haveWin ? 1 : 0); ++f) {
-                    auto &ix = idx[f];
-                    const auto &ord = *orders[f];
-                    while (ix < ord.size()) {
-                        const int i = ord[ix++];
-                        const std::uint64_t k2 = nativeTurnMacroKey(undecided[i].state);
-                        if (taken.count(k2)) continue;
-                        taken.insert(k2);
-                        out.push_back(undecided[i]);
-                        progressed = true;
-                        break;
-                    }
-                }
-                if (!progressed) break;
-            }
-        }
-        if (out.empty() && haveLoss) out.push_back(std::move(anyLoss));
-    }
-
-    struct TurnMacroNode;
-    struct TurnMacroEdge {
-        TurnMacroCand cand;
-        double value = 0.0;     // running mean, W_SHAPE scale
-        int visits = 0;
-        std::unique_ptr<TurnMacroNode> child;
-    };
-    struct TurnMacroNode {
-        std::vector<TurnMacroEdge> edges;
-        int totalVisits = 0;
-    };
-
-    void nativeTurnMacroBuild(TurnMacroNode &node, const BattleContext &bc,
-                              int nodeCap, int K, int maxTurn) {
-        std::vector<TurnMacroCand> cands;
-        nativeTurnMacroExpand(bc, nodeCap, K, cands);
-        node.edges.reserve(cands.size());
-        for (auto &c : cands) {
-            TurnMacroEdge e;
-            const bool term = c.terminal;
-            const double tv = c.terminalValue;
-            e.cand = std::move(c);
-            if (term) {
-                e.value = tv;
-            } else {
-                BattleContext sim(e.cand.state);
-                e.value = nativeHeuristicPlayout(sim, maxTurn, nullptr);
-            }
-            e.visits = 1;
-            node.edges.push_back(std::move(e));
-        }
-        node.totalVisits = static_cast<int>(node.edges.size());
-    }
-
-    // Returns the best root line and per-edge (visits, value) diagnostics.
-    std::pair<std::vector<search::Action>, std::vector<double>>
-    nativeRunTurnMacroSearch(const BattleContext &root, int macroSims,
-                             int nodeCap, int K, std::uint64_t seed,
-                             double cUcb = 12.0) {
-        nativeSeedGumbel(seed);
-        g_rootMaxHp = root.player.maxHp;
-        g_rootGold = root.player.gold;
-        const int maxTurn = root.turn + NATIVE_MAX_TURNS_PER_SEARCH;
-
-        TurnMacroNode rootNode;
-        nativeTurnMacroBuild(rootNode, root, nodeCap, K, maxTurn);
-        if (rootNode.edges.empty()) return {{}, {}};
-
-        // UCB exploration constant in W_SHAPE units. Measured (2026-08-07):
-        // at 12.0 it fits boss-fight value gaps (win-vs-death ~190 units) but
-        // SWAMPS easy-fight gaps (~4 units for a 5-HP-better line), so on easy
-        // fights visits never concentrate, the root pick is near-arbitrary
-        // among the K lines, and quadrupling macro sims changes nothing --
-        // exactly the observed +4.8 HP tax and clean-death regression. Caller
-        // supplies it; the sweep decides the shipped value.
-        const double C = cUcb;
-        for (int s = 0; s < macroSims; ++s) {
-            TurnMacroNode *node = &rootNode;
-            std::vector<TurnMacroEdge*> path;
-            double leafValue = 0.0;
-            for (int depth = 0; depth < 48; ++depth) {
-                TurnMacroEdge *pick = nullptr;
-                double best = -std::numeric_limits<double>::infinity();
-                for (auto &e : node->edges) {
-                    const double u = e.value
-                        + C * std::sqrt(std::log(node->totalVisits + 1.0)
-                                        / (e.visits + 1.0));
-                    if (u > best) { best = u; pick = &e; }
-                }
-                if (pick == nullptr) { leafValue = 0.0; break; }
-                path.push_back(pick);
-                if (pick->cand.terminal) {
-                    leafValue = pick->cand.terminalValue;
-                    break;
-                }
-                if (pick->cand.state.turn >= maxTurn) {
-                    leafValue = pick->value;   // horizon: keep current estimate
-                    break;
-                }
-                if (pick->child == nullptr) {
-                    pick->child = std::make_unique<TurnMacroNode>();
-                    nativeTurnMacroBuild(*pick->child, pick->cand.state,
-                                         nodeCap, K, maxTurn);
-                    if (pick->child->edges.empty()) {
-                        leafValue = pick->value;
-                        break;
-                    }
-                    double mx = -std::numeric_limits<double>::infinity();
-                    for (const auto &e : pick->child->edges) mx = std::max(mx, e.value);
-                    leafValue = mx;
-                    break;
-                }
-                node = pick->child.get();
-            }
-            for (auto *e : path) {
-                e->visits += 1;
-                e->value += (leafValue - e->value) / e->visits;
-            }
-            rootNode.totalVisits += 1;
-        }
-
-        const TurnMacroEdge *bestEdge = nullptr;
-        for (const auto &e : rootNode.edges) {
-            if (bestEdge == nullptr || e.visits > bestEdge->visits
-                || (e.visits == bestEdge->visits && e.value > bestEdge->value)) {
-                bestEdge = &e;
-            }
-        }
-        std::vector<double> diag;
-        for (const auto &e : rootNode.edges) {
-            diag.push_back(static_cast<double>(e.visits));
-            diag.push_back(e.value);
-        }
-        return {bestEdge->cand.line, diag};
-    }
 
     // Leaf evaluation by bounded EXHAUSTIVE search over the current turn, in
     // place of a greedy playout to the end of the fight.
@@ -4028,6 +3761,286 @@ namespace {
             }
         }
         return nullptr;
+    }
+
+    // ----- BEAM-MCTS: turn-level macro-action search ------------------------
+    //
+    // The measured motivation (docs/04, 2026-08-06/07): a beam that enumerates
+    // each turn exhaustively and carries ~20 DIVERSE lines across turns
+    // converts 50% of the boss fights per-card MCTS loses (width 6 buys
+    // nothing, width 20 nearly everything) -- but re-expands every frontier
+    // state every turn and costs 135x. This grafts exactly the part that pays
+    // into MCTS: tree nodes are END-OF-TURN states, an expansion enumerates the
+    // node's turn ONCE (bounded DFS), prunes the end-states to K survivors by
+    // the beam's three-frontier rule (max damage / max HP kept / blend), and
+    // caches them; simulations then descend by UCB and evaluate new children
+    // with the ordinary rollout-to-terminal. One search per TURN, whole line
+    // executed -- replacing the 2-4 per-card searches a turn costs today.
+    //
+    // v1 is evaluated CLAIRVOYANT only (the deployed env's regime, and where
+    // the census deaths are). Under honest draw order a committed line is extra
+    // strategy fusion; the information-set layer is the planned follow-up.
+
+    struct TurnMacroCand {
+        std::vector<search::Action> line;   // includes the closing END_TURN
+        BattleContext state;                // after the enemy has acted
+        bool terminal;
+        double terminalValue;
+    };
+
+    // Dedupe/diversity key = the SAME vetted key the transposition table uses
+    // (nativeStateKey: 19 player power statuses, monster strength/vulnerable/
+    // weak/block/moveHistory, hand, piles). The first version hashed only
+    // hp/block/energy/hand/monster-HP, which MERGED lines differing in applied
+    // statuses -- Bash-with-Vulnerable collapsed into plain-attack lines,
+    // Inflame lines into no-op lines -- so the frontier discarded exactly the
+    // winning lines at generation time. Measured as the safe-fight death
+    // regression that sims, c_ucb and backup_mode all failed to move.
+    std::uint64_t nativeTurnMacroKey(const BattleContext &bc) {
+        return static_cast<std::uint64_t>(NativeStateKeyHash{}(nativeStateKey(bc)));
+    }
+
+    int nativeTurnMacroEnemyHp(const BattleContext &bc) {
+        int hp = 0;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const Monster &m = bc.monsters.arr[i];
+            if (m.curHp > 0 || m.halfDead) hp += std::max(0, static_cast<int>(m.curHp));
+        }
+        return hp;
+    }
+
+    // Enumerate this turn once; return terminal candidates plus at most K
+    // undecided end-of-turn states chosen by the three-frontier rule.
+    void nativeTurnMacroExpand(const BattleContext &bc, int nodeCap, int K,
+                               std::vector<TurnMacroCand> &out) {
+        const int enemy0 = nativeTurnMacroEnemyHp(bc);
+        std::vector<TurnMacroCand> undecided;
+        TurnMacroCand bestWin;  bool haveWin = false;
+        TurnMacroCand anyLoss;  bool haveLoss = false;
+
+        struct Item { BattleContext bc; std::vector<search::Action> seq; };
+        std::vector<Item> stack;
+        stack.push_back({bc, {}});
+        std::set<std::uint64_t> seen;
+        seen.insert(nativeTurnMacroKey(bc));
+        int nodes = 0;
+        while (!stack.empty() && nodes < nodeCap) {
+            Item cur = std::move(stack.back());
+            stack.pop_back();
+            ++nodes;
+            const auto actions = sts::py::getLegalActions(cur.bc);
+            for (const auto &a : actions) {
+                BattleContext next(cur.bc);
+                a.execute(next);
+                std::vector<search::Action> seq = cur.seq;
+                seq.push_back(a);
+                if (next.outcome != Outcome::UNDECIDED) {
+                    const double tv = NATIVE_W_SHAPE
+                        * nativeExpectimaxTerminalReward(next, next.turn);
+                    if (next.outcome == Outcome::PLAYER_VICTORY) {
+                        if (!haveWin || next.player.curHp > bestWin.state.player.curHp) {
+                            bestWin = {std::move(seq), std::move(next), true, tv};
+                            haveWin = true;
+                        }
+                    } else if (!haveLoss) {
+                        anyLoss = {std::move(seq), std::move(next), true, tv};
+                        haveLoss = true;
+                    }
+                    continue;
+                }
+                if (a.getActionType() == search::ActionType::END_TURN) {
+                    undecided.push_back({std::move(seq), std::move(next), false, 0.0});
+                    continue;
+                }
+                if (next.turn != cur.bc.turn) {   // safety; should not happen
+                    undecided.push_back({std::move(seq), std::move(next), false, 0.0});
+                    continue;
+                }
+                const std::uint64_t k = nativeTurnMacroKey(next);
+                if (seen.count(k)) continue;
+                seen.insert(k);
+                stack.push_back({std::move(next), std::move(seq)});
+            }
+        }
+
+        out.clear();
+        if (haveWin) out.push_back(std::move(bestWin));
+        if (!undecided.empty()) {
+            const int nU = static_cast<int>(undecided.size());
+            std::vector<int> byDealt(nU), byHp(nU), byBlend(nU);
+            for (int i = 0; i < nU; ++i) byDealt[i] = byHp[i] = byBlend[i] = i;
+            auto dealt = [&](int i) {
+                return enemy0 - nativeTurnMacroEnemyHp(undecided[i].state);
+            };
+            std::sort(byDealt.begin(), byDealt.end(), [&](int a2, int b2) {
+                return dealt(a2) > dealt(b2); });
+            std::sort(byHp.begin(), byHp.end(), [&](int a2, int b2) {
+                return undecided[a2].state.player.curHp > undecided[b2].state.player.curHp; });
+            std::sort(byBlend.begin(), byBlend.end(), [&](int a2, int b2) {
+                return dealt(a2) + 2 * undecided[a2].state.player.curHp
+                     > dealt(b2) + 2 * undecided[b2].state.player.curHp; });
+            std::set<std::uint64_t> taken;
+            std::array<const std::vector<int>*, 3> orders{&byDealt, &byHp, &byBlend};
+            std::array<std::size_t, 3> idx{0, 0, 0};
+            while (static_cast<int>(out.size()) < K + (haveWin ? 1 : 0)) {
+                bool progressed = false;
+                for (int f = 0; f < 3
+                        && static_cast<int>(out.size()) < K + (haveWin ? 1 : 0); ++f) {
+                    auto &ix = idx[f];
+                    const auto &ord = *orders[f];
+                    while (ix < ord.size()) {
+                        const int i = ord[ix++];
+                        const std::uint64_t k2 = nativeTurnMacroKey(undecided[i].state);
+                        if (taken.count(k2)) continue;
+                        taken.insert(k2);
+                        out.push_back(undecided[i]);
+                        progressed = true;
+                        break;
+                    }
+                }
+                if (!progressed) break;
+            }
+        }
+        if (out.empty() && haveLoss) out.push_back(std::move(anyLoss));
+    }
+
+    struct TurnMacroNode;
+    struct TurnMacroEdge {
+        TurnMacroCand cand;
+        double value = 0.0;     // running mean, W_SHAPE scale
+        int visits = 0;
+        std::unique_ptr<TurnMacroNode> child;
+    };
+    struct TurnMacroNode {
+        std::vector<TurnMacroEdge> edges;
+        int totalVisits = 0;
+    };
+
+    void nativeTurnMacroBuild(TurnMacroNode &node, const BattleContext &bc,
+                              int nodeCap, int K, int maxTurn) {
+        std::vector<TurnMacroCand> cands;
+        nativeTurnMacroExpand(bc, nodeCap, K, cands);
+        node.edges.reserve(cands.size());
+        for (auto &c : cands) {
+            TurnMacroEdge e;
+            const bool term = c.terminal;
+            const double tv = c.terminalValue;
+            e.cand = std::move(c);
+            if (term) {
+                e.value = tv;
+            } else {
+                BattleContext sim(e.cand.state);
+                e.value = nativeHeuristicPlayout(sim, maxTurn, nullptr);
+            }
+            e.visits = 1;
+            node.edges.push_back(std::move(e));
+        }
+        node.totalVisits = static_cast<int>(node.edges.size());
+    }
+
+    // Returns the best root line and per-edge (visits, value) diagnostics.
+    std::pair<std::vector<search::Action>, std::vector<double>>
+    nativeRunTurnMacroSearch(const BattleContext &root, int macroSims,
+                             int nodeCap, int K, std::uint64_t seed,
+                             double cUcb = 12.0, int backupMode = 0) {
+        nativeSeedGumbel(seed);
+        g_rootMaxHp = root.player.maxHp;
+        g_rootGold = root.player.gold;
+        const int maxTurn = root.turn + NATIVE_MAX_TURNS_PER_SEARCH;
+
+        TurnMacroNode rootNode;
+        nativeTurnMacroBuild(rootNode, root, nodeCap, K, maxTurn);
+        if (rootNode.edges.empty()) return {{}, {}};
+
+        // UCB exploration constant in W_SHAPE units. Measured (2026-08-07):
+        // at 12.0 it fits boss-fight value gaps (win-vs-death ~190 units) but
+        // SWAMPS easy-fight gaps (~4 units for a 5-HP-better line), so on easy
+        // fights visits never concentrate, the root pick is near-arbitrary
+        // among the K lines, and quadrupling macro sims changes nothing --
+        // exactly the observed +4.8 HP tax and clean-death regression. Caller
+        // supplies it; the sweep decides the shipped value.
+        const double C = cUcb;
+        for (int s = 0; s < macroSims; ++s) {
+            TurnMacroNode *node = &rootNode;
+            std::vector<TurnMacroEdge*> path;
+            double leafValue = 0.0;
+            for (int depth = 0; depth < 48; ++depth) {
+                TurnMacroEdge *pick = nullptr;
+                double best = -std::numeric_limits<double>::infinity();
+                for (auto &e : node->edges) {
+                    const double u = e.value
+                        + C * std::sqrt(std::log(node->totalVisits + 1.0)
+                                        / (e.visits + 1.0));
+                    if (u > best) { best = u; pick = &e; }
+                }
+                if (pick == nullptr) { leafValue = 0.0; break; }
+                path.push_back(pick);
+                if (pick->cand.terminal) {
+                    leafValue = pick->cand.terminalValue;
+                    break;
+                }
+                if (pick->cand.state.turn >= maxTurn) {
+                    leafValue = pick->value;   // horizon: keep current estimate
+                    break;
+                }
+                if (pick->child == nullptr) {
+                    pick->child = std::make_unique<TurnMacroNode>();
+                    nativeTurnMacroBuild(*pick->child, pick->cand.state,
+                                         nodeCap, K, maxTurn);
+                    if (pick->child->edges.empty()) {
+                        leafValue = pick->value;
+                        break;
+                    }
+                    // backupMode selects how a fresh expansion's K
+                    // single-rollout children collapse into one leaf value.
+                    // 0 = max: correct in expectation for a choice node but
+                    //     max-of-K-noisy-samples injects ~+1.5 sd of optimism
+                    //     per new depth -- measured as the +4 HP tax and the
+                    //     safe-fight death regression (docs/04 2026-08-07).
+                    // 1 = mean: unbiased estimator of a RANDOM line, i.e.
+                    //     pessimistic for a choosing player.
+                    // 2 = mean of the top 3: value of "one of my good
+                    //     options" with the single-sample max bias damped.
+                    std::vector<double> vs;
+                    vs.reserve(pick->child->edges.size());
+                    for (const auto &e : pick->child->edges) vs.push_back(e.value);
+                    std::sort(vs.begin(), vs.end(), std::greater<double>());
+                    if (backupMode == 1) {
+                        double sum = 0.0;
+                        for (double v : vs) sum += v;
+                        leafValue = sum / vs.size();
+                    } else if (backupMode == 2) {
+                        const int t = std::min<int>(3, static_cast<int>(vs.size()));
+                        double sum = 0.0;
+                        for (int j = 0; j < t; ++j) sum += vs[j];
+                        leafValue = sum / t;
+                    } else {
+                        leafValue = vs[0];
+                    }
+                    break;
+                }
+                node = pick->child.get();
+            }
+            for (auto *e : path) {
+                e->visits += 1;
+                e->value += (leafValue - e->value) / e->visits;
+            }
+            rootNode.totalVisits += 1;
+        }
+
+        const TurnMacroEdge *bestEdge = nullptr;
+        for (const auto &e : rootNode.edges) {
+            if (bestEdge == nullptr || e.visits > bestEdge->visits
+                || (e.visits == bestEdge->visits && e.value > bestEdge->value)) {
+                bestEdge = &e;
+            }
+        }
+        std::vector<double> diag;
+        for (const auto &e : rootNode.edges) {
+            diag.push_back(static_cast<double>(e.visits));
+            diag.push_back(e.value);
+        }
+        return {bestEdge->cand.line, diag};
     }
 
     std::pair<search::Action, std::vector<std::int64_t>> nativeRunMctsSearchSeqHalving(
@@ -6257,18 +6270,19 @@ PYBIND11_MODULE(slaythespire, m) {
 
     m.def("run_turn_macro_search", [](const BattleContext &bc, int macroSims,
                                       int nodeCap, int k, std::uint64_t seed,
-                                      double cUcb) {
+                                      double cUcb, int backupMode) {
         std::pair<std::vector<search::Action>, std::vector<double>> result;
         {
             pybind11::gil_scoped_release release;
-            result = nativeRunTurnMacroSearch(bc, macroSims, nodeCap, k, seed, cUcb);
+            result = nativeRunTurnMacroSearch(bc, macroSims, nodeCap, k, seed,
+                                              cUcb, backupMode);
         }
         pybind11::list line;
         for (const auto &a : result.first) line.append(a);
         return pybind11::make_tuple(line, pybind11::cast(result.second));
     }, pybind11::arg("bc"), pybind11::arg("macro_sims") = 48,
        pybind11::arg("node_cap") = 1500, pybind11::arg("k") = 20,
-       pybind11::arg("seed") = 0, pybind11::arg("c_ucb") = 12.0,
+       pybind11::arg("seed") = 0, pybind11::arg("c_ucb") = 12.0, pybind11::arg("backup_mode") = 0,
        "BEAM-MCTS: turn-level macro-action search (docs/04 2026-08-07). Returns "
        "(line, diag) where line is the chosen turn's full action sequence "
        "(closing END_TURN included) to execute verbatim, and diag interleaves "
