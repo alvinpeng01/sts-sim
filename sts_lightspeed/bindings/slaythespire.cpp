@@ -2834,7 +2834,8 @@ namespace {
     // Returns the best root line and per-edge (visits, value) diagnostics.
     std::pair<std::vector<search::Action>, std::vector<double>>
     nativeRunTurnMacroSearch(const BattleContext &root, int macroSims,
-                             int nodeCap, int K, std::uint64_t seed) {
+                             int nodeCap, int K, std::uint64_t seed,
+                             double cUcb = 12.0) {
         nativeSeedGumbel(seed);
         g_rootMaxHp = root.player.maxHp;
         g_rootGold = root.player.gold;
@@ -2844,10 +2845,14 @@ namespace {
         nativeTurnMacroBuild(rootNode, root, nodeCap, K, maxTurn);
         if (rootNode.edges.empty()) return {{}, {}};
 
-        // UCB exploration constant in W_SHAPE units. Terminal rewards span
-        // roughly [-40, +150] on this scale; 12 explores without drowning the
-        // value signal. First candidate for tuning if v1 underperforms.
-        const double C = 12.0;
+        // UCB exploration constant in W_SHAPE units. Measured (2026-08-07):
+        // at 12.0 it fits boss-fight value gaps (win-vs-death ~190 units) but
+        // SWAMPS easy-fight gaps (~4 units for a 5-HP-better line), so on easy
+        // fights visits never concentrate, the root pick is near-arbitrary
+        // among the K lines, and quadrupling macro sims changes nothing --
+        // exactly the observed +4.8 HP tax and clean-death regression. Caller
+        // supplies it; the sweep decides the shipped value.
+        const double C = cUcb;
         for (int s = 0; s < macroSims; ++s) {
             TurnMacroNode *node = &rootNode;
             std::vector<TurnMacroEdge*> path;
@@ -6251,18 +6256,19 @@ PYBIND11_MODULE(slaythespire, m) {
           "through spirecomm, so this cannot and does not attempt to replay it.");
 
     m.def("run_turn_macro_search", [](const BattleContext &bc, int macroSims,
-                                      int nodeCap, int k, std::uint64_t seed) {
+                                      int nodeCap, int k, std::uint64_t seed,
+                                      double cUcb) {
         std::pair<std::vector<search::Action>, std::vector<double>> result;
         {
             pybind11::gil_scoped_release release;
-            result = nativeRunTurnMacroSearch(bc, macroSims, nodeCap, k, seed);
+            result = nativeRunTurnMacroSearch(bc, macroSims, nodeCap, k, seed, cUcb);
         }
         pybind11::list line;
         for (const auto &a : result.first) line.append(a);
         return pybind11::make_tuple(line, pybind11::cast(result.second));
     }, pybind11::arg("bc"), pybind11::arg("macro_sims") = 48,
        pybind11::arg("node_cap") = 1500, pybind11::arg("k") = 20,
-       pybind11::arg("seed") = 0,
+       pybind11::arg("seed") = 0, pybind11::arg("c_ucb") = 12.0,
        "BEAM-MCTS: turn-level macro-action search (docs/04 2026-08-07). Returns "
        "(line, diag) where line is the chosen turn's full action sequence "
        "(closing END_TURN included) to execute verbatim, and diag interleaves "
