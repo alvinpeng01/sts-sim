@@ -550,6 +550,11 @@ namespace {
         // why the raw form is not safe to compare against a terminal reward.
         double horizonValueMode = 0.0;
         double studentWeight = 0.0;
+        // Proven same-turn-kill override (nativeFindLethalActionIdx). 0 = off.
+        // 1.0 = take any proven kill (measured: pays +1.14 HP on clean fights).
+        // 2.0 = take it only in DANGER (unblocked incoming >= 25% of HP) --
+        // keeps the honest-boss save (12-0) without the safe-turn HP tax.
+        double exactLethalCheck = 0.0;
         // Bilinear student applied ONLY to the PUCT prior / visit order, leaving both
         // rollout action-pickers untouched. studentWeight above enters nativeScoreAction,
         // which all three consumers share -- the rollout's greedy pick, its sampled pick,
@@ -2558,6 +2563,88 @@ namespace {
     // tune_value_leaf.py). Held-out this reaches ~53% win at 3.4x rollout speed
     // -- a real recovery from the un-tuned 29%, but a linear ceiling below
     // rollout's 83%, which is why the value-NET (nonlinear) is the next step.
+    // Bounded exhaustive LETHAL check over the current turn (END_TURN excluded,
+    // potions included). Returns the index into getLegalActions(bc) of the first
+    // action of a PROVEN same-turn kill line -- preferring the winning line with
+    // the most player HP remaining -- or -1 if no such line exists within the
+    // node budget.
+    //
+    // Why: at 100-400 sims the tree finds same-turn kills only probabilistically,
+    // and every missed kill grants the enemy one more turn of attacks. The
+    // beam-vs-MCTS comparison (docs/04) showed exhaustive within-turn play
+    // converting fights the sampling search loses; this is its cheapest sound
+    // fragment. When it fires it is an exact PROOF given the simulated draw
+    // stream: in the clairvoyant regime (the whole-run env's regime) the win is
+    // certain; under honest_draw_order a line that draws mid-turn is a gamble on
+    // the permuted pile -- exactly as trustworthy as every other value the
+    // search computes there, no more.
+    //
+    // Cost control: gated on total visible enemy HP (one-turn kills against a
+    // big pool are implausible, and the gate keeps the DFS off the hot path of
+    // long fights), plus the node cap.
+    int nativeFindLethalActionIdx(const BattleContext &bc, int nodeCap) {
+        int enemyHp = 0;
+        for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+            const Monster &m = bc.monsters.arr[i];
+            if (m.curHp > 0 && !m.halfDead) {
+                enemyHp += m.curHp;
+            }
+        }
+        if (enemyHp <= 0 || enemyHp > 150) {
+            return -1;
+        }
+        const auto rootActions = sts::py::getLegalActions(bc);
+        int bestHp = -1;
+        int bestIdx = -1;
+        std::vector<std::pair<BattleContext, int>> stack;
+        for (int ri = 0; ri < static_cast<int>(rootActions.size()); ++ri) {
+            const auto &a = rootActions[ri];
+            if (a.getActionType() == search::ActionType::END_TURN) {
+                continue;
+            }
+            BattleContext next(bc);
+            a.execute(next);
+            if (next.outcome == Outcome::PLAYER_VICTORY) {
+                if (static_cast<int>(next.player.curHp) > bestHp) {
+                    bestHp = next.player.curHp;
+                    bestIdx = ri;
+                }
+                continue;
+            }
+            if (next.outcome != Outcome::UNDECIDED || next.turn != bc.turn) {
+                continue;
+            }
+            stack.emplace_back(std::move(next), ri);
+        }
+        int nodes = 0;
+        while (!stack.empty() && nodes < nodeCap) {
+            auto item = std::move(stack.back());
+            stack.pop_back();
+            ++nodes;
+            const BattleContext &cur = item.first;
+            const int firstIdx = item.second;
+            for (const auto &a : sts::py::getLegalActions(cur)) {
+                if (a.getActionType() == search::ActionType::END_TURN) {
+                    continue;
+                }
+                BattleContext next(cur);
+                a.execute(next);
+                if (next.outcome == Outcome::PLAYER_VICTORY) {
+                    if (static_cast<int>(next.player.curHp) > bestHp) {
+                        bestHp = next.player.curHp;
+                        bestIdx = firstIdx;
+                    }
+                    continue;
+                }
+                if (next.outcome != Outcome::UNDECIDED || next.turn != cur.turn) {
+                    continue;
+                }
+                stack.emplace_back(std::move(next), firstIdx);
+            }
+        }
+        return bestIdx;
+    }
+
     // Leaf evaluation by bounded EXHAUSTIVE search over the current turn, in
     // place of a greedy playout to the end of the fight.
     //
@@ -3965,6 +4052,43 @@ namespace {
     std::pair<search::Action, std::vector<std::int64_t>> nativeRunMctsSearch(
             const BattleContext &bc, int nSimulations, bool useCrn, std::uint64_t crnBase,
             bool useSearchSeed = false, std::uint64_t searchSeed = 0) {
+        // 1.0 = always take a proven kill. Measured (docs/04): on clean fights
+        // that PAYS +1.14 HP/fight (t=5.85) -- a proof about the WIN is not a
+        // proof about the COST, and forcing the kill a turn early through
+        // HP-costing lines loses to the search's free kill next turn. On the
+        // honest boss set the same override saved 12 fights and lost 0
+        // (chi2=10.1): when the fight can still be lost, certainty beats the
+        // estimate. Mode 2.0 keeps only that upside: fire only when the enemy's
+        // unblocked incoming this turn is at least a quarter of our HP, i.e.
+        // when declining the proof risks dying, and leave safe finishes to the
+        // search, which prices them better.
+        if (g_params.exactLethalCheck != 0.0) {
+            bool danger = true;
+            if (g_params.exactLethalCheck >= 2.0) {
+                const double vulnMult =
+                    bc.player.hasStatus<PS::VULNERABLE>() ? 1.5 : 1.0;
+                double incoming = 0.0;
+                for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+                    if (bc.monsters.arr[i].curHp > 0) {
+                        incoming += nativePredictedIncomingDamage(
+                            bc, bc.monsters.arr[i], vulnMult);
+                    }
+                }
+                const double unblocked =
+                    std::max(0.0, incoming - bc.player.block);
+                danger = unblocked >= 0.25 * std::max(1, static_cast<int>(bc.player.curHp));
+            }
+            if (danger) {
+                const int killIdx = nativeFindLethalActionIdx(bc, 800);
+                if (killIdx >= 0) {
+                    // Proven same-turn kill: no search needed. The visit vector
+                    // is empty -- callers that vote on visits see "no election
+                    // held", and the action is exact rather than sampled.
+                    const auto actions = sts::py::getLegalActions(bc);
+                    return {actions[killIdx], std::vector<std::int64_t>()};
+                }
+            }
+        }
         if (g_useSeqHalving) {
             return nativeRunMctsSearchSeqHalving(bc, nSimulations, useCrn, crnBase, useSearchSeed, searchSeed);
         }
@@ -6080,6 +6204,7 @@ PYBIND11_MODULE(slaythespire, m) {
         d["horizon_value_mode"] = g_params.horizonValueMode;
         d["student_weight"] = g_params.studentWeight;
         d["student_prior_weight"] = g_params.studentPriorWeight;
+        d["exact_lethal_check"] = g_params.exactLethalCheck;
         d["survival_mode_threshold"] = g_params.survivalModeThreshold;
         d["survival_mode_attack_scale"] = g_params.survivalModeAttackScale;
         d["honest_wc_chance"] = g_params.honestWcChance;
@@ -6205,6 +6330,7 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("horizon_value_mode", g_params.horizonValueMode);
         setIf("student_weight", g_params.studentWeight);
         setIf("student_prior_weight", g_params.studentPriorWeight);
+        setIf("exact_lethal_check", g_params.exactLethalCheck);
         setIf("survival_mode_threshold", g_params.survivalModeThreshold);
         setIf("survival_mode_attack_scale", g_params.survivalModeAttackScale);
         setIf("honest_wc_chance", g_params.honestWcChance);

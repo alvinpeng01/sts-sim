@@ -45,7 +45,13 @@ sys.path.insert(0, r"C:\Users\Alvin\grok\sts-project\slay-sim")
 
 from lightspeed.paths import HUMAN_BENCHMARK, native_build_path  # noqa: E402
 
-sys.path.insert(0, native_build_path())
+# STS_ENGINE_DIR selects a side-built engine (build/honest_test) when the main
+# .pyd is link-locked by a running training process. Must win over the default.
+_engine = os.environ.get("STS_ENGINE_DIR")
+if _engine:
+    os.add_dll_directory(_engine)
+    sys.path.insert(0, _engine)
+sys.path.insert(1 if _engine else 0, native_build_path())
 
 import slaythespire as sts  # noqa: E402
 
