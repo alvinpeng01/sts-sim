@@ -555,6 +555,13 @@ namespace {
         // 2.0 = take it only in DANGER (unblocked incoming >= 25% of HP) --
         // keeps the honest-boss save (12-0) without the safe-turn HP tax.
         double exactLethalCheck = 0.0;
+        // >= 8 routes boss AND elite battles inside nativePlayoutBattle (the
+        // whole-run env's combat resolver -- i.e. TRAINING and run-level eval)
+        // through the turn-macro beam-MCTS at this many macro sims, leaving
+        // ordinary hallway fights on the per-card search. 0 = off. Measured
+        // (docs/04 2026-08-07, fixed dedupe key): act-1 boss deaths 48.3% ->
+        // 31.7% at 48 macro sims, regressor-slice parity on safe elites.
+        double macroCombatSims = 0.0;
         // Bilinear student applied ONLY to the PUCT prior / visit order, leaving both
         // rollout action-pickers untouched. studentWeight above enters nativeScoreAction,
         // which all three consumers share -- the rollout's greedy pick, its sampled pick,
@@ -4497,6 +4504,19 @@ namespace {
         int firstTempoOverrideMonsterHp = -1;
     };
 
+    bool nativeIsEliteEncounter(MonsterEncounter e) {
+        switch (e) {
+            case MonsterEncounter::GREMLIN_NOB: case MonsterEncounter::LAGAVULIN:
+            case MonsterEncounter::THREE_SENTRIES: case MonsterEncounter::GREMLIN_LEADER:
+            case MonsterEncounter::SLAVERS: case MonsterEncounter::BOOK_OF_STABBING:
+            case MonsterEncounter::GIANT_HEAD: case MonsterEncounter::NEMESIS:
+            case MonsterEncounter::REPTOMANCER: case MonsterEncounter::SHIELD_AND_SPEAR:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     NativePlayoutStats nativePlayoutBattle(
             BattleContext &bc, int nSimulations,
             bool useSearchSeed = false, std::uint64_t searchSeedBase = 0) {
@@ -4629,6 +4649,27 @@ namespace {
             // while keeping an identical battle exactly reproducible.
             const std::uint64_t decisionSeed =
                     searchSeedBase + 0x9E3779B97F4A7C15ULL * decisionIndex;
+            // Boss/elite battles route through the turn-macro beam-MCTS when
+            // macro_combat_sims selects it: one search per TURN, whole line
+            // executed. Falls through to the per-card search when the macro
+            // returns nothing (no legal non-END_TURN line at all).
+            if (g_params.macroCombatSims >= 8.0
+                    && (isBossEncounter(bc.encounter)
+                        || nativeIsEliteEncounter(bc.encounter))) {
+                auto macro = nativeRunTurnMacroSearch(
+                        bc, static_cast<int>(g_params.macroCombatSims),
+                        1500, 20, decisionSeed);
+                if (!macro.first.empty()) {
+                    stats.simulations += static_cast<std::uint64_t>(
+                        g_params.macroCombatSims);
+                    stats.searchedDecisions += 1;
+                    for (const auto &a : macro.first) {
+                        if (bc.outcome != Outcome::UNDECIDED) break;
+                        a.execute(bc);
+                    }
+                    continue;
+                }
+            }
             auto result = nativeRunMctsSearch(
                     bc, nSimulations, false, 0,
                     useSearchSeed, decisionSeed);
@@ -6506,6 +6547,7 @@ PYBIND11_MODULE(slaythespire, m) {
         d["student_weight"] = g_params.studentWeight;
         d["student_prior_weight"] = g_params.studentPriorWeight;
         d["exact_lethal_check"] = g_params.exactLethalCheck;
+        d["macro_combat_sims"] = g_params.macroCombatSims;
         d["survival_mode_threshold"] = g_params.survivalModeThreshold;
         d["survival_mode_attack_scale"] = g_params.survivalModeAttackScale;
         d["honest_wc_chance"] = g_params.honestWcChance;
@@ -6632,6 +6674,7 @@ PYBIND11_MODULE(slaythespire, m) {
         setIf("student_weight", g_params.studentWeight);
         setIf("student_prior_weight", g_params.studentPriorWeight);
         setIf("exact_lethal_check", g_params.exactLethalCheck);
+        setIf("macro_combat_sims", g_params.macroCombatSims);
         setIf("survival_mode_threshold", g_params.survivalModeThreshold);
         setIf("survival_mode_attack_scale", g_params.survivalModeAttackScale);
         setIf("honest_wc_chance", g_params.honestWcChance);
